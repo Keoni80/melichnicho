@@ -115,6 +115,7 @@ def search():
         "items": items,
         "niche_stats": niche_stats,
         "seller_ranking": seller_ranking,
+        "source": raw.get("source"),
     })
 
 
