@@ -463,6 +463,22 @@ main {
 }
 
 /* ─── AI button ──────────────────────────────────────── */
+.btn-discover {
+    background: linear-gradient(135deg, #0F3460 0%, #1A5276 100%);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: var(--r);
+    padding: .7rem 1.3rem;
+    font-size: .9rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity .15s, transform .1s;
+}
+.btn-discover:hover { opacity: .85; }
+.btn-discover:active { transform: scale(.97); }
+.btn-discover:disabled { opacity: .45; cursor: not-allowed; }
+
 .btn-ai {
     background: linear-gradient(135deg, #6C3FC5 0%, #9B59B6 100%);
     color: #fff;
@@ -550,3 +566,26 @@ main {
     white-space: pre-wrap;
     flex: 1;
 }
+
+.modal-box-wide { max-width: 780px; }
+
+.discover-meta {
+    color: var(--muted);
+    font-size: .82rem;
+    margin-bottom: 1rem;
+    padding-bottom: .6rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.ai-text {
+    white-space: normal;
+    line-height: 1.7;
+    font-size: .9rem;
+}
+.ai-text h2, .ai-text h3, .ai-text h4 {
+    color: var(--accent);
+    margin: 1rem 0 .4rem;
+}
+.ai-text h2 { font-size: 1.1rem; }
+.ai-text h3 { font-size: 1rem; }
+.ai-text h4 { font-size: .92rem; }

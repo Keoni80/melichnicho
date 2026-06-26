@@ -216,6 +216,45 @@ def _highlights_fallback(category_id, max_results=50):
     return {"items": items, "total": len(items), "source": "highlights"}
 
 
+def get_subcategories(category_id):
+    try:
+        resp = _get(f"{BASE_URL}/categories/{category_id}", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        children = data.get("children_categories", [])
+        return [{"id": c["id"], "name": c["name"], "total_items_in_this_category": c.get("total_items_in_this_category", 0)} for c in children]
+    except Exception:
+        return []
+
+
+def sample_subcategory(category_id, limit=20):
+    params = {"category": category_id, "limit": limit, "offset": 0}
+    try:
+        resp = _get(f"{BASE_URL}/sites/MLA/search", params=params, timeout=15)
+        if resp.status_code == 403:
+            return None
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        total = data.get("paging", {}).get("total", 0)
+        items = [_parse_item(r) for r in results]
+        sellers = {i["seller_id"] for i in items if i.get("seller_id")}
+        prices = [i["price"] for i in items if i.get("price", 0) > 0]
+        sold = [i.get("sold_quantity", 0) for i in items]
+        return {
+            "total_listings": total,
+            "sampled": len(items),
+            "unique_sellers": len(sellers),
+            "avg_price": round(sum(prices) / len(prices), 2) if prices else 0,
+            "median_price": round(sorted(prices)[len(prices) // 2], 2) if prices else 0,
+            "avg_sold": round(sum(sold) / len(sold), 1) if sold else 0,
+            "max_sold": max(sold) if sold else 0,
+            "top_items": [{"title": i["title"], "price": i["price"], "sold_quantity": i["sold_quantity"], "seller_name": i["seller_name"]} for i in sorted(items, key=lambda x: x.get("sold_quantity", 0), reverse=True)[:5]],
+        }
+    except Exception:
+        return None
+
+
 def _parse_item(raw):
     seller   = raw.get("seller", {})
     shipping = raw.get("shipping", {})

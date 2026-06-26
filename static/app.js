@@ -16,12 +16,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('filter-toggle').addEventListener('click', toggleFilters);
     document.getElementById('ai-btn').addEventListener('click', analyzeWithAI);
+    document.getElementById('discover-btn').addEventListener('click', discoverOpportunities);
     document.getElementById('close-modal').addEventListener('click', closeModal);
+    document.getElementById('close-discover-modal').addEventListener('click', closeDiscoverModal);
     document.getElementById('ai-modal').addEventListener('click', e => {
         if (e.target === e.currentTarget) closeModal();
     });
+    document.getElementById('discover-modal').addEventListener('click', e => {
+        if (e.target === e.currentTarget) closeDiscoverModal();
+    });
     document.addEventListener('keydown', e => {
-        if (e.key === 'Escape') closeModal();
+        if (e.key === 'Escape') { closeModal(); closeDiscoverModal(); }
     });
 });
 
@@ -279,6 +284,62 @@ function openModal(text, verdict) {
 function closeModal() {
     document.getElementById('ai-modal').style.display = 'none';
     document.body.style.overflow = '';
+}
+
+// ─── Discover ────────────────────────────────────────────
+
+async function discoverOpportunities() {
+    const categoryId = document.getElementById('category-select').value;
+    if (!categoryId) {
+        showError('Seleccioná una categoría para descubrir oportunidades.');
+        return;
+    }
+
+    showError(null);
+    const btn = document.getElementById('discover-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Analizando subcategorías...';
+
+    try {
+        const resp = await fetch('/api/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ category_id: categoryId }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showError(data.error || 'Error al descubrir oportunidades.');
+            return;
+        }
+
+        const content = document.getElementById('discover-content');
+        let html = `<p class="discover-meta">Se analizaron <strong>${data.subcategories_analyzed}</strong> subcategorías</p>`;
+        html += `<div class="ai-text">${formatAIText(data.analysis)}</div>`;
+        content.innerHTML = html;
+
+        document.getElementById('discover-modal').style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    } catch (_) {
+        showError('Error de conexión al descubrir oportunidades.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 Descubrir oportunidades';
+    }
+}
+
+function closeDiscoverModal() {
+    document.getElementById('discover-modal').style.display = 'none';
+    document.body.style.overflow = '';
+}
+
+function formatAIText(text) {
+    return text
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+        .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+        .replace(/^# (.+)$/gm, '<h2>$1</h2>')
+        .replace(/\n/g, '<br>');
 }
 
 // ─── Helpers ──────────────────────────────────────────────

@@ -24,6 +24,7 @@
                 <option value="">Todas las categorías</option>
             </select>
             <button id="search-btn" class="btn-primary">Buscar nicho</button>
+            <button id="discover-btn" class="btn-discover" title="Analiza subcategorías con IA para encontrar nichos con poca competencia">🔍 Descubrir oportunidades</button>
         </div>
 
         <button id="filter-toggle" class="filter-toggle">
@@ -137,6 +138,17 @@
 
     </div>
 </main>
+
+<!-- Discover Modal -->
+<div id="discover-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="discover-modal-title">
+    <div class="modal-box modal-box-wide">
+        <div class="modal-header">
+            <h3 id="discover-modal-title">🔍 Oportunidades Descubiertas</h3>
+            <button id="close-discover-modal" class="modal-close" aria-label="Cerrar">✕</button>
+        </div>
+        <div id="discover-content" class="ai-content"></div>
+    </div>
+</div>
 
 <!-- AI Analysis Modal -->
 <div id="ai-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="modal-title">

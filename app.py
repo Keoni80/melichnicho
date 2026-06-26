@@ -3,12 +3,13 @@ import io
 import json
 import os
 import sqlite3
+import time
 
 import anthropic
 from flask import Flask, Response, jsonify, render_template, request
 
 from analyzer import analyze_niche
-from meli_api import get_categories, search_meli
+from meli_api import get_categories, get_subcategories, sample_subcategory, search_meli
 
 app = Flask(__name__)
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "melichnicho.db")
@@ -156,6 +157,70 @@ def export_csv(search_id):
         mimetype="text/csv; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename=melichnicho_{search_id}.csv"},
     )
+
+
+@app.route("/api/discover", methods=["POST"])
+def discover():
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY no configurada en el servidor."}), 500
+
+    data = request.get_json() or {}
+    category_id = (data.get("category_id") or "").strip()
+    if not category_id:
+        return jsonify({"error": "Seleccioná una categoría."}), 400
+
+    subcats = get_subcategories(category_id)
+    if not subcats:
+        return jsonify({"error": "No se encontraron subcategorías para analizar."}), 404
+
+    subcats_with_data = []
+    for sc in subcats[:15]:
+        metrics = sample_subcategory(sc["id"])
+        if metrics:
+            subcats_with_data.append({
+                "id": sc["id"],
+                "name": sc["name"],
+                "total_items_in_category": sc.get("total_items_in_this_category", 0),
+                **metrics,
+            })
+        time.sleep(0.3)
+
+    if not subcats_with_data:
+        return jsonify({"error": "No se pudieron obtener datos de las subcategorías."}), 502
+
+    datos_str = json.dumps(subcats_with_data, ensure_ascii=False, indent=2)
+    prompt = (
+        "Sos un experto en e-commerce en MercadoLibre Argentina.\n"
+        "Te paso datos de subcategorías dentro de una categoría.\n"
+        "Analizá y encontrá las MEJORES OPORTUNIDADES de nicho, priorizando:\n"
+        "1. Pocos vendedores únicos (baja competencia)\n"
+        "2. Buena demanda (ventas promedio decentes)\n"
+        "3. Precios que permitan margen\n\n"
+        "Devolvé un informe en español con:\n"
+        "- Top 3-5 nichos recomendados, ordenados de mejor a peor oportunidad\n"
+        "- Para cada uno: nombre de la subcategoría, por qué es buena oportunidad, "
+        "nivel de competencia, rango de precios sugerido, y un veredicto "
+        "(🟢 Entrar / 🟡 Evaluar / 🔴 Evitar)\n"
+        "- Un resumen final con tu recomendación principal\n\n"
+        f"Datos de subcategorías:\n{datos_str}"
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        analysis_text = response.content[0].text
+        return jsonify({
+            "analysis": analysis_text,
+            "subcategories_analyzed": len(subcats_with_data),
+            "data": subcats_with_data,
+        })
+    except anthropic.APIError as e:
+        return jsonify({"error": str(e)}), 502
 
 
 @app.route("/api/analyze", methods=["POST"])
