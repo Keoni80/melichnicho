@@ -103,11 +103,6 @@ def _get(url, **kwargs):
     return resp
 
 
-# Refresh at startup so a stale access token in env vars never blocks requests.
-# The refresh token rotates on each use and has 30-day validity.
-if os.environ.get("MELI_REFRESH_TOKEN"):
-    _refresh_token()
-
 
 def get_categories():
     try:
