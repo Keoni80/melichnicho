@@ -96,10 +96,7 @@ function numVal(id) {
 
 // ─── Render ───────────────────────────────────────────────
 
-function renderResults({ items, niche_stats, seller_ranking, source }) {
-    const banner = document.getElementById('highlights-banner');
-    banner.style.display = source === 'highlights' ? 'block' : 'none';
-
+function renderResults({ items, niche_stats, seller_ranking }) {
     lastNicheData = {
         niche_stats,
         top_items: items.slice(0, 20).map(i => ({

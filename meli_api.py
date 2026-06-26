@@ -127,10 +127,6 @@ def search_meli(query="", category_id="", max_results=100):
         params["offset"] = offset
         try:
             resp = _get(f"{BASE_URL}/sites/MLA/search", params=params, timeout=15)
-            if resp.status_code == 403:
-                if not category_id:
-                    return {"error": "La búsqueda por keyword no está disponible desde este servidor. Seleccioná una categoría para ver productos destacados."}
-                return _highlights_fallback(category_id, max_results)
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.Timeout:
@@ -152,68 +148,6 @@ def search_meli(query="", category_id="", max_results=100):
         time.sleep(0.25)
 
     return {"items": all_items[:max_results], "total": len(all_items)}
-
-
-def _highlights_fallback(category_id, max_results=50):
-    """Fallback via /highlights when /search is unavailable (403).
-    Flow: highlights → product IDs → (product info + best listing) per product.
-    Avoids /items endpoint which is also blocked for uncertified apps.
-    """
-    path = f"/highlights/MLA/category/{category_id}" if category_id else "/highlights/MLA"
-    try:
-        resp = _get(f"{BASE_URL}{path}", timeout=10)
-        resp.raise_for_status()
-        content = resp.json().get("content", [])
-    except Exception as e:
-        return {"error": f"Error al consultar MercadoLibre: {e}"}
-
-    product_ids = [item["id"] for item in content[:min(max_results, 10)]]
-    if not product_ids:
-        return {"items": [], "total": 0, "source": "highlights"}
-
-    items = []
-    for pid in product_ids:
-        try:
-            r_prod = _get(f"{BASE_URL}/products/{pid}", timeout=8)
-            if not r_prod.ok:
-                continue
-            prod = r_prod.json()
-
-            r_listing = _get(f"{BASE_URL}/products/{pid}/items",
-                             params={"limit": 1}, timeout=8)
-            if not r_listing.ok:
-                continue
-            results = r_listing.json().get("results", [])
-            if not results:
-                continue
-            listing = results[0]
-
-            # Thumbnail from first picker variant
-            thumbnail = ""
-            pickers = prod.get("pickers", [])
-            if pickers and pickers[0].get("products"):
-                thumbnail = pickers[0]["products"][0].get("thumbnail", "")
-
-            items.append({
-                "id":                 listing.get("item_id", pid),
-                "title":              prod.get("name", ""),
-                "price":              listing.get("price", 0) or 0,
-                "currency":           listing.get("currency_id", "ARS"),
-                "sold_quantity":      0,
-                "available_quantity": 0,
-                "condition":          listing.get("condition", ""),
-                "seller_id":          str(listing.get("seller_id", "")),
-                "seller_name":        "",
-                "seller_level":       "",
-                "free_shipping":      listing.get("shipping", {}).get("free_shipping", False),
-                "permalink":          f"https://www.mercadolibre.com.ar/p/{pid}",
-                "thumbnail":          thumbnail,
-                "listing_type":       listing.get("listing_type_id", ""),
-            })
-        except Exception:
-            continue
-
-    return {"items": items, "total": len(items), "source": "highlights"}
 
 
 def get_subcategories(category_id):

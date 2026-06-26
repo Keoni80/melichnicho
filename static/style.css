@@ -300,17 +300,6 @@ main {
     letter-spacing: .5px;
 }
 
-.highlights-banner {
-    background: rgba(255,152,0,.1);
-    border: 1px solid var(--medium);
-    color: #FFB74D;
-    border-radius: var(--r);
-    padding: .6rem 1rem;
-    font-size: .83rem;
-    margin-bottom: .75rem;
-}
-.highlights-banner a { color: var(--accent); }
-
 .niche-warning {
     grid-column: 1 / -1;
     background: rgba(255,152,0,.12);
