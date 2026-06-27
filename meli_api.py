@@ -314,28 +314,32 @@ def search_alibaba(query, limit=20):
         return []
 
 
-def _parse_alibaba_price(price_str):
+_ES_STOP = {
+    "de", "en", "para", "con", "el", "la", "los", "las", "un", "una", "y", "a",
+    "por", "del", "al", "se", "su", "lo", "le", "es", "no", "si", "the", "for",
+    "and", "with", "new", "hombre", "mujer", "color", "negro", "blanco", "rojo",
+    "azul", "verde", "talla", "talle", "marca", "modelo", "nuevo", "original",
+}
+
+
+def _match_score(meli_title, ali_name):
     import re
-    if not price_str:
-        return None, None
-    cleaned = str(price_str).replace(",", "")
-    nums = [float(n) for n in re.findall(r"\d+\.?\d*", cleaned) if float(n) > 0]
-    if not nums:
-        return None, None
-    return min(nums), max(nums)
+    def tokens(t):
+        out = set()
+        for w in re.split(r"[\s/,()\-]+", t):
+            w = w.strip(".").lower()
+            if not w or w in _ES_STOP:
+                continue
+            # Keep: proper nouns, model numbers (contain digit), or long words
+            if w[0].isupper() or any(c.isdigit() for c in w) or len(w) >= 5:
+                out.add(w)
+        return out
 
-
-def _strip_html(text):
-    import re
-    return re.sub(r"<[^>]+>", "", text or "")
-
-
-def _fix_ali_url(url):
-    if not url:
-        return ""
-    if url.startswith("//"):
-        return "https:" + url
-    return url
+    mt = tokens(meli_title)
+    at = tokens(ali_name)
+    if not mt:
+        return 0.0
+    return len(mt & at) / len(mt)
 
 
 def enrich_with_alibaba(items, alibaba_raw, query=""):
@@ -346,10 +350,13 @@ def enrich_with_alibaba(items, alibaba_raw, query=""):
         if pmin is None:
             continue
         parsed.append({
+            "name": a.get("name", ""),
             "price_min": float(pmin),
             "price_max": float(pmax),
             "url": a.get("product_url", ""),
         })
+
+    ali_search_url = f"https://www.alibaba.com/trade/search?SearchText={requests.utils.quote(query)}"
 
     if not parsed:
         for item in items:
@@ -358,17 +365,29 @@ def enrich_with_alibaba(items, alibaba_raw, query=""):
             item["alibaba_url"] = None
         return items
 
-    # Use midpoint per product, then P25-P75 to filter outliers
+    # Fallback: P25-P75 range across all results
     mids = sorted((p["price_min"] + p["price_max"]) / 2 for p in parsed)
     n = len(mids)
-    p25 = round(mids[max(0, n // 4)], 2)
-    p75 = round(mids[min(n - 1, (3 * n) // 4)], 2)
-    ali_search_url = f"https://www.alibaba.com/trade/search?SearchText={requests.utils.quote(query)}"
+    fallback_min = round(mids[max(0, n // 4)], 2)
+    fallback_max = round(mids[min(n - 1, (3 * n) // 4)], 2)
 
     for item in items:
-        item["alibaba_price_min"] = p25
-        item["alibaba_price_max"] = p75
-        item["alibaba_url"] = ali_search_url
+        best_score = 0.0
+        best = None
+        for a in parsed:
+            score = _match_score(item.get("title", ""), a["name"])
+            if score > best_score:
+                best_score = score
+                best = a
+
+        if best_score >= 0.3 and best:
+            item["alibaba_price_min"] = round(best["price_min"], 2)
+            item["alibaba_price_max"] = round(best["price_max"], 2)
+            item["alibaba_url"] = best["url"] or ali_search_url
+        else:
+            item["alibaba_price_min"] = fallback_min
+            item["alibaba_price_max"] = fallback_max
+            item["alibaba_url"] = ali_search_url
 
     return items
 
