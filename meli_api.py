@@ -149,7 +149,7 @@ def _search_apify(query="", category_id="", max_results=100):
         log.error("Apify search failed: %s", e)
         return None
 
-    log.info("Apify returned %d items", len(data))
+    log.info("Apify returned %d items. First: %s", len(data), data[0] if data else "EMPTY")
     items = []
     for r in data:
         items.append({
