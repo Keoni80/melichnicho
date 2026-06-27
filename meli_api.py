@@ -291,17 +291,15 @@ def sample_subcategory(category_id, limit=5):
 
 
 def search_alibaba(query, limit=20):
-    import re as _re
     token = os.environ.get("APIFY_API_TOKEN")
     if not token or not query:
         return []
-    search_url = f"https://www.alibaba.com/trade/search?SearchText={requests.utils.quote(query)}"
     log.info("Searching Alibaba via Apify: '%s'", query)
     try:
         resp = requests.post(
-            "https://api.apify.com/v2/acts/scraperx~alibaba-scraper/run-sync-get-dataset-items",
+            "https://api.apify.com/v2/acts/devcake~alibaba-products-scraper/run-sync-get-dataset-items",
             params={"token": token},
-            json={"urls": [search_url], "maxItems": limit},
+            json={"queries": [query], "max_pages": 1},
             timeout=160,
         )
         resp.raise_for_status()
@@ -341,18 +339,16 @@ def _fix_ali_url(url):
 
 
 def enrich_with_alibaba(items, alibaba_raw, query=""):
-    import re
     parsed = []
     for a in alibaba_raw:
-        pmin, pmax = _parse_alibaba_price(a.get("price", ""))
+        pmin = a.get("price_min")
+        pmax = a.get("price_max") or pmin
         if pmin is None:
             continue
         parsed.append({
-            "title": _strip_html(a.get("title", "")),
-            "price_min": pmin,
-            "price_max": pmax,
-            "url": _fix_ali_url(a.get("productUrl", "")),
-            "moq": a.get("moq", ""),
+            "price_min": float(pmin),
+            "price_max": float(pmax),
+            "url": a.get("product_url", ""),
         })
 
     if not parsed:
@@ -362,7 +358,6 @@ def enrich_with_alibaba(items, alibaba_raw, query=""):
             item["alibaba_url"] = None
         return items
 
-    # Global range across all Alibaba results for this keyword
     global_min = min(p["price_min"] for p in parsed)
     global_max = max(p["price_max"] for p in parsed)
     ali_search_url = f"https://www.alibaba.com/trade/search?SearchText={requests.utils.quote(query)}"
