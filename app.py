@@ -1,20 +1,24 @@
 import csv
+import hashlib
 import io
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import time
 
 logging.basicConfig(level=logging.INFO)
 
 import anthropic
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+from functools import wraps
 
 from analyzer import analyze_niche
 from meli_api import get_categories, get_subcategories, sample_subcategory, search_meli
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "melichnicho.db")
 
 
@@ -48,21 +52,83 @@ def init_db():
         """)
 
 
+def init_users_table():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        admin_user = os.environ.get("ADMIN_USER")
+        admin_pass = os.environ.get("ADMIN_PASSWORD")
+        if admin_user and admin_pass:
+            pw_hash = hashlib.sha256(admin_pass.encode()).hexdigest()
+            conn.execute(
+                "INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?)",
+                (admin_user, pw_hash),
+            )
+
+
 init_db()
+init_users_table()
+
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if "user" not in session:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "No autorizado"}), 401
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if "user" in session:
+        return redirect(url_for("index"))
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        pw_hash = hashlib.sha256(password.encode()).hexdigest()
+        with sqlite3.connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT id FROM users WHERE username = ? AND password_hash = ?",
+                (username, pw_hash),
+            ).fetchone()
+        if row:
+            session["user"] = username
+            return redirect(url_for("index"))
+        error = "Usuario o contraseña incorrectos"
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.pop("user", None)
+    return redirect(url_for("login"))
 
 
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
 
 
 @app.route("/api/categories")
+@login_required
 def categories():
     return jsonify(get_categories())
 
 
 @app.route("/api/search", methods=["POST"])
+@login_required
 def search():
     data = request.get_json() or {}
     query = (data.get("query") or "").strip()
@@ -124,6 +190,7 @@ def search():
 
 
 @app.route("/api/history")
+@login_required
 def history():
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -135,6 +202,7 @@ def history():
 
 
 @app.route("/api/export/<int:search_id>")
+@login_required
 def export_csv(search_id):
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
@@ -162,6 +230,7 @@ def export_csv(search_id):
 
 
 @app.route("/api/discover", methods=["POST"])
+@login_required
 def discover():
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -226,6 +295,7 @@ def discover():
 
 
 @app.route("/api/analyze", methods=["POST"])
+@login_required
 def analyze_ai():
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:

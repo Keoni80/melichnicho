@@ -44,7 +44,19 @@ header {
 }
 .logo strong { color: var(--accent); font-weight: 800; }
 
-.tagline { color: var(--muted); font-size: .85rem; }
+.tagline { color: var(--muted); font-size: .85rem; flex: 1; }
+
+.btn-logout {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: .8rem;
+    padding: .4rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: var(--r);
+    transition: color .2s, border-color .2s;
+    white-space: nowrap;
+}
+.btn-logout:hover { color: var(--text); border-color: var(--muted); }
 
 /* ─── Main layout ────────────────────────────────────── */
 main {

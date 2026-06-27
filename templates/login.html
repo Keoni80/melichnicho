@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MeLi Nicho – Iniciar sesión</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .login-wrapper {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+        }
+        .login-box {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--r);
+            padding: 2.5rem 2rem;
+            width: 100%;
+            max-width: 380px;
+            text-align: center;
+        }
+        .login-box .logo {
+            font-size: 2rem;
+            margin-bottom: .3rem;
+        }
+        .login-box .tagline {
+            margin-bottom: 2rem;
+        }
+        .login-field {
+            width: 100%;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--r);
+            padding: .75rem 1rem;
+            color: var(--text);
+            font-size: .95rem;
+            outline: none;
+            margin-bottom: .8rem;
+            transition: border-color .2s;
+        }
+        .login-field:focus { border-color: var(--accent); }
+        .login-field::placeholder { color: var(--muted); }
+        .login-btn {
+            width: 100%;
+            margin-top: .5rem;
+        }
+        .login-error {
+            background: rgba(244,67,54,.13);
+            border: 1px solid var(--bad);
+            color: #EF9A9A;
+            border-radius: var(--r);
+            padding: .6rem .9rem;
+            margin-bottom: 1rem;
+            font-size: .85rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-wrapper">
+        <div class="login-box">
+            <div class="logo">⚡ MeLi <strong>Nicho</strong></div>
+            <p class="tagline">Detectá oportunidades de negocio en MercadoLibre Argentina</p>
+
+            {% if error %}
+            <div class="login-error">{{ error }}</div>
+            {% endif %}
+
+            <form method="POST" action="/login">
+                <input type="text" name="username" class="login-field" placeholder="Usuario" required autofocus>
+                <input type="password" name="password" class="login-field" placeholder="Contraseña" required>
+                <button type="submit" class="btn-primary login-btn">Iniciar sesión</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
