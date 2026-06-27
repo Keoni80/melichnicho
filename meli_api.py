@@ -290,6 +290,80 @@ def sample_subcategory(category_id, limit=5):
     }
 
 
+def search_alibaba(query, limit=20):
+    token = os.environ.get("APIFY_API_TOKEN")
+    if not token or not query:
+        return []
+    log.info("Searching Alibaba via Apify: '%s'", query)
+    try:
+        resp = requests.post(
+            "https://api.apify.com/v2/acts/simpleapi~alibaba-listings-scraper/run-sync-get-dataset-items",
+            params={"token": token},
+            json={"urls": [query], "limit": limit},
+            timeout=160,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        log.info("Alibaba Apify returned %d items", len(data))
+        return data
+    except Exception as e:
+        log.error("Alibaba Apify search failed: %s", e)
+        return []
+
+
+def _parse_alibaba_price(price_str):
+    import re
+    if not price_str:
+        return None, None
+    cleaned = str(price_str).replace(",", "")
+    nums = [float(n) for n in re.findall(r"\d+\.?\d*", cleaned) if float(n) > 0]
+    if not nums:
+        return None, None
+    return min(nums), max(nums)
+
+
+def _title_match_score(meli_title, ali_title):
+    stop = {"de", "en", "para", "con", "el", "la", "los", "las", "un", "una",
+            "y", "a", "por", "del", "al", "se", "su", "lo", "le", "es", "no", "si"}
+    mt = {w.lower() for w in meli_title.split() if len(w) > 2 and w.lower() not in stop}
+    at = {w.lower() for w in ali_title.split() if len(w) > 2 and w.lower() not in stop}
+    if not mt:
+        return 0.0
+    return len(mt & at) / len(mt)
+
+
+def enrich_with_alibaba(items, alibaba_raw):
+    parsed = []
+    for a in alibaba_raw:
+        pmin, pmax = _parse_alibaba_price(a.get("price", ""))
+        parsed.append({
+            "title": a.get("title", ""),
+            "price_min": pmin,
+            "price_max": pmax,
+            "url": a.get("productUrl", ""),
+        })
+
+    for item in items:
+        best_score = 0.0
+        best = None
+        for a in parsed:
+            score = _title_match_score(item.get("title", ""), a["title"])
+            if score > best_score:
+                best_score = score
+                best = a
+
+        if best_score >= 0.25 and best and best["price_min"] is not None:
+            item["alibaba_price_min"] = best["price_min"]
+            item["alibaba_price_max"] = best["price_max"]
+            item["alibaba_url"] = best["url"]
+        else:
+            item["alibaba_price_min"] = None
+            item["alibaba_price_max"] = None
+            item["alibaba_url"] = None
+
+    return items
+
+
 def _parse_item(raw):
     seller   = raw.get("seller", {})
     shipping = raw.get("shipping", {})

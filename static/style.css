@@ -424,6 +424,15 @@ main {
 .score-med  { background: rgba(255,152,0,.18);  color: #FFB74D; }
 .score-low  { background: rgba(244,67,54,.14);  color: #EF9A9A; }
 
+.ali-link {
+    color: #FF6D00;
+    text-decoration: none;
+    font-weight: 600;
+    font-size: .8rem;
+    white-space: nowrap;
+}
+.ali-link:hover { text-decoration: underline; }
+
 /* ─── History sidebar ────────────────────────────────── */
 .history-col { position: sticky; top: 1rem; }
 

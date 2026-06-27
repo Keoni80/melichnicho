@@ -15,7 +15,7 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 from functools import wraps
 
 from analyzer import analyze_niche
-from meli_api import get_categories, get_subcategories, sample_subcategory, search_meli
+from meli_api import enrich_with_alibaba, get_categories, get_subcategories, sample_subcategory, search_alibaba, search_meli
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -158,6 +158,11 @@ def search():
         return jsonify(raw), 502
 
     items, niche_stats, seller_ranking = analyze_niche(raw["items"], filters)
+
+    if query:
+        alibaba_raw = search_alibaba(query)
+        if alibaba_raw:
+            items = enrich_with_alibaba(items, alibaba_raw)
 
     max_sellers = filters.get("max_sellers")
     if max_sellers and niche_stats.get("unique_sellers", 0) > int(max_sellers):

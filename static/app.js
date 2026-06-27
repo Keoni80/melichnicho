@@ -173,6 +173,7 @@ function renderItemsTable(items) {
             <td>${item.free_shipping
                 ? '<span class="badge free">Gratis</span>'
                 : '<span class="badge paid">Pago</span>'}</td>
+            <td class="price">${fmtAliPrice(item.alibaba_price_min, item.alibaba_price_max, item.alibaba_url)}</td>
             <td><span class="score-badge ${scoreClass(item.opportunity_score)}">${item.opportunity_score}</span></td>
         </tr>
     `).join('');
@@ -347,6 +348,14 @@ function scoreClass(s) {
     return 'score-low';
 }
 
+function fmtAliPrice(min, max, url) {
+    if (min == null) return '<span style="color:var(--muted)">—</span>';
+    const hi = (max != null && max !== min) ? max : null;
+    const range = hi ? `$${min.toFixed(2)} – $${hi.toFixed(2)}` : `$${min.toFixed(2)}`;
+    if (url) return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="ali-link">${range}</a>`;
+    return `<span class="ali-link">${range}</span>`;
+}
+
 function fmtPrice(p) {
     return new Intl.NumberFormat('es-AR', {
         style: 'currency', currency: 'ARS', maximumFractionDigits: 0,
@@ -379,9 +388,11 @@ let _progressInterval = null;
 const _PROGRESS_STEPS = [
     [0,     2,  'Iniciando búsqueda...'],
     [3000,  18, 'Buscando en MercadoLibre...'],
-    [8000,  48, 'Descargando resultados...'],
-    [16000, 72, 'Calculando oportunidades...'],
-    [23000, 88, 'Casi listo...'],
+    [10000, 42, 'Descargando resultados...'],
+    [20000, 55, 'Buscando precios en Alibaba...'],
+    [32000, 72, 'Comparando productos...'],
+    [45000, 88, 'Calculando oportunidades...'],
+    [52000, 93, 'Casi listo...'],
 ];
 
 function setLoading(on) {
@@ -398,13 +409,13 @@ function _startProgress() {
     const fill  = document.getElementById('progress-fill');
     const label = document.getElementById('progress-label');
     const timeEl = document.getElementById('progress-time');
-    const EXPECTED = 28000;
+    const EXPECTED = 55000;
     const start = Date.now();
 
     fill.style.transition = 'none';
     fill.style.width = '2%';
     label.textContent = _PROGRESS_STEPS[0][2];
-    timeEl.textContent = '~28s';
+    timeEl.textContent = '~55s';
 
     _progressInterval = setInterval(() => {
         const elapsed = Date.now() - start;
