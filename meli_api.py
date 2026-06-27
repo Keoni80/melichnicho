@@ -117,6 +117,59 @@ def get_categories():
         return []
 
 
+def _search_apify(query="", category_id="", max_results=100):
+    token = os.environ.get("APIFY_API_TOKEN")
+    if not token:
+        return None
+
+    search_url = "https://www.mercadolibre.com.ar"
+    if query:
+        search_url += f"/jm/search?as_word={requests.utils.quote(query)}"
+        if category_id:
+            search_url += f"&category={category_id}"
+    elif category_id:
+        search_url += f"/c/{category_id}"
+    else:
+        return None
+
+    log.info("Falling back to Apify scraper: %s", search_url)
+    try:
+        resp = requests.post(
+            "https://api.apify.com/v2/acts/karamelo~mercadolibre-scraper-espanol-castellano/run-sync-get-dataset-items",
+            params={"token": token},
+            json={
+                "searchUrls": [search_url],
+                "maxItems": max_results,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.error("Apify search failed: %s", e)
+        return None
+
+    items = []
+    for r in data:
+        items.append({
+            "id": r.get("id", ""),
+            "title": r.get("title", ""),
+            "price": r.get("price", 0) or 0,
+            "currency": r.get("currency", "ARS"),
+            "sold_quantity": r.get("sold_quantity", 0) or 0,
+            "available_quantity": r.get("available_quantity", 0) or 0,
+            "condition": r.get("condition", ""),
+            "seller_id": r.get("seller", {}).get("id", "") if isinstance(r.get("seller"), dict) else "",
+            "seller_name": r.get("seller", {}).get("nickname", "") if isinstance(r.get("seller"), dict) else r.get("seller", ""),
+            "seller_level": "",
+            "free_shipping": bool(r.get("free_shipping") or r.get("shipping", {}).get("free_shipping") if isinstance(r.get("shipping"), dict) else False),
+            "permalink": r.get("permalink", r.get("link", "")),
+            "thumbnail": r.get("thumbnail", r.get("image", "")),
+            "listing_type": "",
+        })
+    return items[:max_results] if items else None
+
+
 def search_meli(query="", category_id="", max_results=100):
     params = {"limit": 50}
     if query:
@@ -131,10 +184,22 @@ def search_meli(query="", category_id="", max_results=100):
         params["offset"] = offset
         try:
             resp = _get(f"{BASE_URL}/sites/MLA/search", params=params, timeout=15)
+            if resp.status_code == 403:
+                log.info("MeLi search returned 403, trying Apify fallback")
+                apify_items = _search_apify(query, category_id, max_results)
+                if apify_items:
+                    return {"items": apify_items, "total": len(apify_items)}
+                return {"error": "La búsqueda de MercadoLibre no está disponible y el scraper Apify falló."}
             resp.raise_for_status()
             data = resp.json()
         except requests.exceptions.Timeout:
             return {"error": "La API de MercadoLibre tardó demasiado. Intentá de nuevo."}
+        except requests.exceptions.HTTPError:
+            log.info("MeLi search HTTP error, trying Apify fallback")
+            apify_items = _search_apify(query, category_id, max_results)
+            if apify_items:
+                return {"items": apify_items, "total": len(apify_items)}
+            return {"error": "Error al consultar MercadoLibre y el scraper Apify falló."}
         except Exception as e:
             return {"error": f"Error al consultar MercadoLibre: {e}"}
 
