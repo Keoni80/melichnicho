@@ -374,7 +374,61 @@ function showError(msg) {
     else el.style.display = 'none';
 }
 
+let _progressInterval = null;
+
+const _PROGRESS_STEPS = [
+    [0,     2,  'Iniciando búsqueda...'],
+    [3000,  18, 'Buscando en MercadoLibre...'],
+    [8000,  48, 'Descargando resultados...'],
+    [16000, 72, 'Calculando oportunidades...'],
+    [23000, 88, 'Casi listo...'],
+];
+
 function setLoading(on) {
-    document.getElementById('loading').style.display = on ? 'flex' : 'none';
     document.getElementById('search-btn').disabled = on;
+    if (on) {
+        document.getElementById('loading').style.display = 'block';
+        _startProgress();
+    } else {
+        _stopProgress();
+    }
+}
+
+function _startProgress() {
+    const fill  = document.getElementById('progress-fill');
+    const label = document.getElementById('progress-label');
+    const timeEl = document.getElementById('progress-time');
+    const EXPECTED = 28000;
+    const start = Date.now();
+
+    fill.style.transition = 'none';
+    fill.style.width = '2%';
+    label.textContent = _PROGRESS_STEPS[0][2];
+    timeEl.textContent = '~28s';
+
+    _progressInterval = setInterval(() => {
+        const elapsed = Date.now() - start;
+        const remaining = Math.max(0, Math.round((EXPECTED - elapsed) / 1000));
+
+        const step = _PROGRESS_STEPS.filter(([t]) => elapsed >= t).pop();
+        const pct = Math.min(95, step[1] + Math.round((elapsed - step[0]) / 1000));
+        fill.style.transition = 'width .5s ease';
+        fill.style.width = pct + '%';
+
+        label.textContent = step[2];
+        timeEl.textContent = remaining > 0 ? `~${remaining}s` : '';
+    }, 500);
+}
+
+function _stopProgress() {
+    clearInterval(_progressInterval);
+    _progressInterval = null;
+    const fill = document.getElementById('progress-fill');
+    fill.style.transition = 'width .3s ease';
+    fill.style.width = '100%';
+    setTimeout(() => {
+        document.getElementById('loading').style.display = 'none';
+        fill.style.transition = 'none';
+        fill.style.width = '0%';
+    }, 350);
 }

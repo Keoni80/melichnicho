@@ -61,8 +61,13 @@
 
         <div id="error-msg" class="error-msg" style="display:none"></div>
         <div id="loading" class="loading" style="display:none">
-            <div class="spinner"></div>
-            Analizando mercado...
+            <div class="progress-header">
+                <span id="progress-label">Iniciando búsqueda...</span>
+                <span id="progress-time" class="progress-time"></span>
+            </div>
+            <div class="progress-track">
+                <div id="progress-fill" class="progress-fill"></div>
+            </div>
         </div>
     </section>
 
