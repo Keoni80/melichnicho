@@ -135,8 +135,9 @@ def _search_apify(query="", category_id="", max_results=100):
                 "mode": "search",
                 "searchTerms": [query],
                 "countries": ["AR"],
-                "maxResultsPerSearch": min(max_results, 100),
+                "maxResultsPerSearch": min(max_results, 30),
                 "sortBy": "relevance",
+                "fetchDetails": True,
             },
             timeout=160,
         )

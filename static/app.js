@@ -378,11 +378,11 @@ let _progressInterval = null;
 
 const _PROGRESS_STEPS = [
     [0,     2,  'Iniciando búsqueda...'],
-    [3000,  20, 'Conectando con MercadoLibre...'],
-    [8000,  45, 'Descargando resultados...'],
-    [16000, 65, 'Enriqueciendo con datos de visitas...'],
-    [22000, 80, 'Calculando oportunidades...'],
-    [26000, 92, 'Casi listo...'],
+    [3000,  15, 'Conectando con MercadoLibre...'],
+    [10000, 35, 'Descargando resultados...'],
+    [25000, 55, 'Obteniendo detalles de productos...'],
+    [45000, 75, 'Calculando oportunidades...'],
+    [55000, 90, 'Casi listo...'],
 ];
 
 function setLoading(on) {
@@ -399,13 +399,13 @@ function _startProgress() {
     const fill  = document.getElementById('progress-fill');
     const label = document.getElementById('progress-label');
     const timeEl = document.getElementById('progress-time');
-    const EXPECTED = 30000;
+    const EXPECTED = 65000;
     const start = Date.now();
 
     fill.style.transition = 'none';
     fill.style.width = '2%';
     label.textContent = _PROGRESS_STEPS[0][2];
-    timeEl.textContent = '~30s';
+    timeEl.textContent = '~65s';
 
     _progressInterval = setInterval(() => {
         const elapsed = Date.now() - start;
