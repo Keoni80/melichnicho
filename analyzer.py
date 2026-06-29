@@ -11,6 +11,13 @@ def analyze_niche(items, filters=None):
 
     unique_sellers = len({i["seller_id"] for i in items if i.get("seller_id")})
 
+    # Per-item seller count from catalog resolution; fall back to global proxy
+    global_competition_n = unique_sellers if unique_sellers > 0 else len(items)
+    avg_catalog_sellers = None
+    catalog_counts = [i["catalog_seller_count"] for i in items if i.get("catalog_seller_count")]
+    if catalog_counts:
+        avg_catalog_sellers = round(sum(catalog_counts) / len(catalog_counts), 1)
+
     prices = [i["price"] for i in items if i.get("price", 0) > 0]
     sorted_prices = sorted(prices)
     median_price = sorted_prices[len(sorted_prices) // 2] if sorted_prices else 0
@@ -20,21 +27,32 @@ def analyze_niche(items, filters=None):
     max_sold = max(sold_list) if sold_list else 1
     avg_sold = sum(sold_list) / len(sold_list) if sold_list else 0
 
+    visits_list = [i.get("visits", 0) for i in items]
+    max_visits = max(visits_list) if visits_list else 1
+    avg_visits = sum(visits_list) / len(visits_list) if visits_list else 0
+
     for item in items:
-        item["opportunity_score"] = _score(item, unique_sellers, median_price, max_sold)
-        item["niche_sellers"] = unique_sellers
+        # Use per-item catalog seller count when available, else global fallback
+        item_competition = item.get("catalog_seller_count") or global_competition_n
+        item["opportunity_score"] = _score(item, item_competition, median_price, max_sold, max_visits)
+        item["niche_sellers"] = item.get("catalog_seller_count") or unique_sellers
         item["median_price"] = round(median_price, 2)
 
     items.sort(key=lambda x: x["opportunity_score"], reverse=True)
 
+    # For display: use avg catalog sellers if available, else total items
+    display_competition_n = round(avg_catalog_sellers) if avg_catalog_sellers else global_competition_n
+
     niche_stats = {
-        "unique_sellers": unique_sellers,
+        "unique_sellers": display_competition_n,
         "total_items": len(items),
         "median_price": round(median_price, 2),
         "avg_price": round(avg_price, 2),
         "avg_sold": round(avg_sold, 1),
         "max_sold": max_sold,
-        "competition_level": _classify(unique_sellers),
+        "avg_visits": round(avg_visits, 0),
+        "max_visits": max_visits,
+        "competition_level": _classify(display_competition_n),
     }
 
     return items, niche_stats, _seller_ranking(items)
@@ -55,21 +73,24 @@ def _apply_filters(items, filters):
     ]
 
 
-def _score(item, unique_sellers, median_price, max_sold):
+def _score(item, competition_n, median_price, max_sold, max_visits=1):
     sold = item.get("sold_quantity", 0)
+    visits = item.get("visits", 0)
     price = item.get("price", 0)
 
-    # Demand (0–40): more sales = higher demand signal
-    demand = (sold / max_sold) * 40 if max_sold > 0 else 0
+    # Demand (0–40): visits = primary signal, sold_quantity = bonus if available
+    visits_demand = (visits / max(max_visits, 1)) * 35
+    sold_bonus = (sold / max(max_sold, 1)) * 5
+    demand = visits_demand + sold_bonus
 
-    # Competition (0–40): fewer sellers = better opportunity window
-    # 1 seller → 40 pts, 50+ sellers → 0 pts
-    competition = max(0.0, 40.0 * (1.0 - (unique_sellers - 1) / 49.0))
+    # Competition (0–40): fewer sellers/items = better opportunity
+    # 1 → 40 pts, 50+ → 0 pts
+    competition = max(0.0, 40.0 * (1.0 - (competition_n - 1) / 49.0))
 
-    # Price positioning (0–15): within 50% of median scores highest
+    # Price positioning (0–10): within 50% of median scores highest
     if median_price > 0 and price > 0:
         diff_ratio = abs(price - median_price) / median_price
-        price_pos = max(0.0, 15.0 * (1.0 - diff_ratio * 2.0))
+        price_pos = max(0.0, 10.0 * (1.0 - diff_ratio * 2.0))
     else:
         price_pos = 0.0
 

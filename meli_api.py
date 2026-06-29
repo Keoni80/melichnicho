@@ -145,6 +145,7 @@ def _search_apify(query="", category_id="", max_results=100):
         return None
 
     log.info("Apify returned %d items", len(data))
+    import re
     items = []
     for r in data:
         price_str = r.get("nuevoPrecio", "0") or "0"
@@ -153,8 +154,17 @@ def _search_apify(query="", category_id="", max_results=100):
         except (ValueError, TypeError):
             price = 0
         envio = str(r.get("Envio", "")).lower()
+        url = r.get("zdireccion", "")
+
+        # Apify returns two URL types:
+        # 1. articulo.mercadolibre.com.ar/MLA-1234567890-... → individual listing ID (works with /visits/items)
+        # 2. mercadolibre.com.ar/.../p/MLA12345678 → catalog product ID (doesn't work with /visits/items)
+        # Store both so enrich_with_visits can resolve catalog IDs to real listing IDs.
+        raw_id = r.get("SKU", "")
+        is_catalog = bool(re.search(r'/p/MLA', url))
+
         items.append({
-            "id": r.get("SKU", ""),
+            "id": raw_id,
             "title": r.get("articuloTitulo", ""),
             "price": price,
             "currency": r.get("Moneda", "ARS"),
@@ -165,40 +175,86 @@ def _search_apify(query="", category_id="", max_results=100):
             "seller_name": r.get("Vendedor", "") or r.get("productoMarca", ""),
             "seller_level": "",
             "free_shipping": "gratis" in envio or "free" in envio or "full" in envio,
-            "permalink": r.get("zdireccion", ""),
+            "permalink": url,
             "thumbnail": r.get("imgDireccion", ""),
-            "listing_type": "",
+            "listing_type": "catalog" if is_catalog else "",
             "visits": 0,
+            "_is_catalog": is_catalog,
         })
     return items[:max_results] if items else None
 
 
+def _resolve_catalog_to_listing(product_id):
+    """Resolve a catalog product ID to its top listing ID and unique seller count.
+
+    Returns (listing_id, seller_count) or (None, 0).
+    """
+    try:
+        resp = _get(
+            f"{BASE_URL}/products/{product_id}/items",
+            params={"limit": 10, "status": "active"},
+            timeout=8,
+        )
+        if resp.ok:
+            data = resp.json()
+            results = data.get("results", [])
+            if not results:
+                return None, 0
+            listing_id = results[0].get("item_id")
+            unique_sellers = len({r.get("seller_id") for r in results if r.get("seller_id")})
+            # paging.total tells us how many total listings exist for this product
+            total_listings = data.get("paging", {}).get("total", unique_sellers)
+            return listing_id, max(unique_sellers, 1)
+    except Exception as e:
+        log.warning("catalog resolve failed for %s: %s", product_id, e)
+    return None, 0
+
+
 def enrich_with_visits(items):
-    """Add visit counts to items using MeLi's /visits/items endpoint (works from server)."""
-    ids = [i["id"] for i in items if i.get("id")]
-    if not ids:
-        return items
+    """Add visit counts to items using MeLi's /visits/items endpoint (1 ID per request).
+
+    Catalog product IDs (from /p/ URLs) are resolved to individual listing IDs first
+    so the visits endpoint can return real data.
+    """
+    for item in items:
+        item_id = item.get("id")
+        if not item_id:
+            continue
+
+        # Catalog items need resolution to individual listing IDs
+        if item.get("_is_catalog"):
+            listing_id, seller_count = _resolve_catalog_to_listing(item_id)
+            if listing_id:
+                item["_resolved_id"] = listing_id
+                item["catalog_seller_count"] = seller_count
+                log.info("Resolved catalog %s → listing %s (%d sellers)", item_id, listing_id, seller_count)
+            time.sleep(0.1)
 
     visits_map = {}
-    # API accepts up to 50 ids per request
-    for chunk_start in range(0, len(ids), 50):
-        chunk = ids[chunk_start:chunk_start + 50]
+    for item in items:
+        query_id = item.get("_resolved_id") or item.get("id")
+        if not query_id:
+            continue
         try:
             resp = _get(
                 f"{BASE_URL}/visits/items",
-                params={"ids": ",".join(chunk)},
-                timeout=10,
+                params={"ids": query_id},
+                timeout=8,
             )
             if resp.ok:
-                visits_map.update(resp.json())
+                v = resp.json().get(query_id, 0)
+                visits_map[item["id"]] = v
         except Exception as e:
-            log.warning("visits enrichment failed: %s", e)
-            break
+            log.warning("visits enrichment failed for %s: %s", query_id, e)
+        time.sleep(0.1)
 
-    if visits_map:
-        for item in items:
-            item["visits"] = visits_map.get(item["id"], 0)
-        log.info("Enriched %d items with visits", len(visits_map))
+    hits = sum(1 for v in visits_map.values() if v > 0)
+    log.info("Visits enrichment: %d items, %d with actual visits", len(visits_map), hits)
+
+    for item in items:
+        item["visits"] = visits_map.get(item["id"], 0)
+        item.pop("_is_catalog", None)
+        item.pop("_resolved_id", None)
 
     return items
 

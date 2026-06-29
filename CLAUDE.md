@@ -40,10 +40,10 @@ Token refresh in `_get()` handles both 401 and 403.
 - `APIFY_API_TOKEN` — Apify scraper
 
 ## Scoring algorithm (analyzer.py)
-- Visits demand: 0–30 pts (visits / max_visits)
-- Sales demand: 0–10 pts (sold / max_sold)
-- Competition: 0–40 pts (fewer sellers = higher score)
-- Price positioning: 0–15 pts (closeness to median price)
+- Visits demand: 0–35 pts (visits / max_visits) — primary demand signal
+- Sales bonus: 0–5 pts (sold_quantity / max_sold) — always 0 for now, ready for future
+- Competition: 0–40 pts (fewer sellers = higher score; falls back to total items if seller_id unavailable)
+- Price positioning: 0–10 pts (closeness to median price)
 - Free shipping bonus: 0–5 pts
 
 ## Key files
