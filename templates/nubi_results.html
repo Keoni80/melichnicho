@@ -55,11 +55,6 @@ button:disabled { opacity: .5; cursor: default; }
 
 /* ── AI section ── */
 #ai-section {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);
-    border-radius: 8px;
-    padding: 1.5rem 1.75rem;
     margin-bottom: 1.5rem;
     display: none;
 }
@@ -69,26 +64,59 @@ button:disabled { opacity: .5; cursor: default; }
     text-transform: uppercase;
     letter-spacing: .1em;
     color: var(--accent);
-    margin-bottom: 1rem;
+    margin-bottom: .75rem;
 }
-#ai-content { font-size: .9rem; line-height: 1.75; color: var(--text); }
-#ai-content h3 {
-    font-size: .95rem;
+#ai-content { font-size: .88rem; line-height: 1.7; }
+
+/* Cards por sección ## */
+.ai-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: .75rem;
+}
+.ai-h3 {
+    font-size: .72rem;
     font-weight: 700;
-    color: var(--text);
-    margin: 1.25rem 0 .4rem;
-    padding-bottom: .3rem;
-    border-bottom: 1px solid var(--border);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: .75rem;
+    padding-bottom: .5rem;
+    border-bottom: 1px solid rgba(255,255,255,.06);
 }
-#ai-content h3:first-child { margin-top: 0; }
-#ai-content h4 { font-size: .88rem; font-weight: 700; color: var(--accent); margin: 1rem 0 .3rem; }
-#ai-content p { margin-bottom: .65rem; color: var(--muted); }
-#ai-content ul { margin: .4rem 0 .75rem 1.1rem; }
-#ai-content li { margin-bottom: .3rem; color: var(--muted); }
-#ai-content li::marker { color: var(--accent); }
-#ai-content strong { color: var(--text); font-weight: 600; }
-#ai-content em { color: #81C784; font-style: normal; }
-#ai-content code { background: rgba(255,255,255,.06); padding: .1em .35em; border-radius: 4px; font-size: .82em; font-family: 'SF Mono', 'Fira Code', monospace; color: #4FC3F7; }
+/* Subsección ### (oportunidad individual) */
+.ai-sub {
+    border-left: 2px solid var(--border);
+    padding-left: .9rem;
+    margin: .5rem 0 .85rem;
+}
+.ai-sub:last-child { margin-bottom: 0; }
+.ai-h4 { font-size: .9rem; font-weight: 700; color: var(--text); margin-bottom: .4rem; }
+
+/* Párrafos y listas */
+.ai-card p { color: var(--muted); margin-bottom: .5rem; }
+.ai-card p:last-child { margin-bottom: 0; }
+.ai-card ul { margin: .3rem 0 .5rem 1.1rem; }
+.ai-card li { color: var(--muted); margin-bottom: .25rem; }
+.ai-card li::marker { color: var(--border); }
+.ai-card strong { color: var(--text); font-weight: 600; }
+.ai-card em { color: #81C784; font-style: normal; }
+.ai-card code { background: rgba(255,255,255,.06); padding: .1em .35em; border-radius: 4px; font-size: .8em; color: #4FC3F7; }
+
+/* Veredictos */
+.ai-verdict {
+    display: inline-block;
+    font-size: .8rem;
+    font-weight: 700;
+    padding: .25rem .75rem;
+    border-radius: 20px;
+    margin-top: .5rem;
+}
+.ai-v-green { background: rgba(76,175,80,.15); color: #81C784; border: 1px solid rgba(76,175,80,.25); }
+.ai-v-yellow { background: rgba(255,152,0,.15); color: #FFB74D; border: 1px solid rgba(255,152,0,.25); }
+.ai-v-red { background: rgba(244,67,54,.15); color: #EF9A9A; border: 1px solid rgba(244,67,54,.25); }
 
 /* ── Tables ── */
 .section-title {
@@ -251,31 +279,50 @@ function mdToHtml(md) {
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
         .replace(/`(.+?)`/g, '<code>$1</code>');
+    const verdictClass = s =>
+        /🟢/.test(s) ? 'ai-v-green' : /🟡/.test(s) ? 'ai-v-yellow' : /🔴/.test(s) ? 'ai-v-red' : null;
 
     const lines = esc(md).split('\n');
-    let html = '', inList = false;
+    let html = '', inCard = false, inSub = false, inList = false;
 
     const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+    const closeSub  = () => { closeList(); if (inSub)  { html += '</div>'; inSub = false; } };
+    const closeCard = () => { closeSub();  if (inCard) { html += '</div>'; inCard = false; } };
 
     for (const raw of lines) {
         const line = raw.trimEnd();
         if (/^## /.test(line)) {
-            closeList();
-            html += `<h3>${inline(line.slice(3))}</h3>`;
+            closeCard();
+            html += `<div class="ai-card"><div class="ai-h3">${inline(line.slice(3))}</div>`;
+            inCard = true;
         } else if (/^### /.test(line)) {
-            closeList();
-            html += `<h4>${inline(line.slice(4))}</h4>`;
+            closeSub();
+            html += `<div class="ai-sub"><div class="ai-h4">${inline(line.slice(4))}</div>`;
+            inSub = true;
         } else if (/^[-•*] /.test(line)) {
-            if (!inList) { html += '<ul>'; inList = true; }
-            html += `<li>${inline(line.slice(2))}</li>`;
+            const content = inline(line.slice(2));
+            const vc = verdictClass(content);
+            if (vc) {
+                closeList();
+                html += `<div class="ai-verdict ${vc}">${content}</div>`;
+            } else {
+                if (!inList) { html += '<ul>'; inList = true; }
+                html += `<li>${content}</li>`;
+            }
         } else if (line.trim() === '') {
             closeList();
         } else {
             closeList();
-            html += `<p>${inline(line)}</p>`;
+            const content = inline(line);
+            const vc = verdictClass(content);
+            if (vc) {
+                html += `<div class="ai-verdict ${vc}">${content}</div>`;
+            } else {
+                html += `<p>${content}</p>`;
+            }
         }
     }
-    closeList();
+    closeCard();
     return html;
 }
 
