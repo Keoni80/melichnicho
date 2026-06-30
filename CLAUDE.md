@@ -214,6 +214,20 @@ Needs `NODE_EXTRA_CA_CERTS` env var set if machine has AVG antivirus (SSL interc
 
 ---
 
+## Nubimetrics data files
+
+Los CSVs de Nubimetrics **no están en este repo** (demasiado grandes: 588 MB total, archivos hasta 97 MB).
+Están guardados en **Google Drive** del usuario (jderoberto@gmail.com).
+
+Categorías disponibles (2026-06-30):
+- Alarmas y sensores (86 MB), Amplificadores (1.2 MB), Barbería (16 MB)
+- Destornilladores (8.3 MB), Fitness y musculación (88 MB), Herrajes de seguridad (90 MB)
+- Herramientas eléctricas (97 MB), Instrumentos a cuerda (37 MB), Mochilas notebook (3.4 MB)
+- OBD (4.1 MB), Pilates y yoga (88 MB), Proyectores y pantallas (7.6 MB)
+- Set de destornilladores (8.6 MB), Teclados musicales (2.3 MB), Tester y multímetros (54 MB)
+
+---
+
 ## Pending ideas
 - Compare prices with Alibaba (Apify has Alibaba scraper too)
 - On-demand Alibaba price lookup per product with margin calculation — FOB lookup + landed cost calculation at current TC
