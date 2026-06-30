@@ -1121,7 +1121,7 @@ async function exportNubiExcel() {
 
 // ─── Sourcing Report Tab ─────────────────────────────────
 
-function openSourcingReport(analysisText, criteria) {
+function openSourcingReport(analysisText, simulation, criteria) {
     const shippingLabel = criteria.shipping === 'courier' ? '✈️ Courier' : '🚢 Marítimo';
     const targetFmt = criteria.target.toLocaleString('es-AR');
     const now = new Date().toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
@@ -1133,8 +1133,45 @@ function openSourcingReport(analysisText, criteria) {
         <span class="chip">💵 TC <strong>${criteria.tc.toLocaleString('es-AR')}</strong></span>
         <span class="chip">🕐 ${now}</span>`;
 
+    let simHtml = '';
+    if (simulation && simulation.length) {
+        const fmtARS = n => '$' + Math.round(n).toLocaleString('es-AR');
+        const total = simulation.reduce((s, p) => s + (p.revenue_mes || 0), 0);
+        const diff = total - criteria.target;
+        const diffLabel = diff >= 0
+            ? `<span class="sim-ok">+${fmtARS(diff)} sobre el objetivo ✓</span>`
+            : `<span class="sim-gap">${fmtARS(Math.abs(diff))} por debajo del objetivo</span>`;
+
+        const rows = simulation.map(p => `
+            <tr>
+                <td class="sim-prod">${p.producto}</td>
+                <td>${fmtARS(p.precio_ars)}</td>
+                <td class="sim-units">${p.unidades_mes}</td>
+                <td>${fmtARS(p.revenue_mes)}</td>
+            </tr>`).join('');
+
+        simHtml = `
+        <div class="sim-box">
+            <div class="sim-title">🎯 Simulación — cómo llegar a $${targetFmt} ARS/mes</div>
+            <table class="sim-table">
+                <thead><tr>
+                    <th>Producto</th>
+                    <th>Precio de venta</th>
+                    <th>Unidades / mes</th>
+                    <th>Revenue mensual</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot><tr class="sim-total">
+                    <td colspan="2"><strong>TOTAL</strong></td>
+                    <td><strong>${simulation.reduce((s,p) => s + p.unidades_mes, 0)}</strong></td>
+                    <td><strong>${fmtARS(total)}</strong><br>${diffLabel}</td>
+                </tr></tfoot>
+            </table>
+        </div>`;
+    }
+
     localStorage.setItem('sourcing_report_data', JSON.stringify({
-        html: mdToHtml(analysisText),
+        html: mdToHtml(analysisText) + simHtml,
         chips,
     }));
 }
@@ -1314,7 +1351,7 @@ async function analyzeSourcingWithAI() {
                 document.getElementById('sourcing-error').textContent = result.error;
                 document.getElementById('sourcing-error').style.display = 'block';
             } else {
-                openSourcingReport(result.analysis, { target, minProd, maxProd, shipping, tc });
+                openSourcingReport(result.analysis, result.simulation || [], { target, minProd, maxProd, shipping, tc });
             }
         }
     } catch (err) {

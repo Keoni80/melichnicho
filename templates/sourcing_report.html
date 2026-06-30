@@ -39,6 +39,50 @@
   tr:nth-child(even) td { background: rgba(15,52,96,.4); }
   hr { border: none; border-top: 1px solid var(--surface2); margin: 1.5rem 0; }
   code { background: var(--surface2); border-radius: 4px; padding: .1rem .4rem; font-size: .85rem; }
+  /* ── Simulation box ── */
+  .sim-box {
+    margin-top: 3rem;
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .sim-title {
+    background: var(--accent);
+    color: #1A1A2E;
+    font-weight: 800;
+    font-size: 1rem;
+    padding: .75rem 1.25rem;
+  }
+  .sim-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .9rem;
+    margin: 0;
+  }
+  .sim-table thead th {
+    background: var(--surface2);
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: .6rem 1rem;
+    text-align: left;
+  }
+  .sim-table tbody td {
+    padding: .65rem 1rem;
+    border-bottom: 1px solid var(--surface2);
+  }
+  .sim-prod { font-weight: 600; color: #fff; }
+  .sim-units { font-weight: 700; font-size: 1.05rem; color: var(--accent); }
+  .sim-total td {
+    padding: .75rem 1rem;
+    background: rgba(255,230,0,.06);
+    border-top: 2px solid var(--accent);
+    font-size: .95rem;
+  }
+  .sim-ok  { color: #4CAF50; font-size: .82rem; }
+  .sim-gap { color: #F44336; font-size: .82rem; }
+
   @media print {
     body { background: #fff; color: #111; }
     header { background: #f5f5f5; border-color: #ccc; }
