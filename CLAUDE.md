@@ -132,13 +132,24 @@ Needs `NODE_EXTRA_CA_CERTS` env var set if machine has AVG antivirus (SSL interc
 
 **Backend endpoints:**
 - `GET /sourcing-report` — serves `sourcing_report.html` (protected by `@login_required`)
-- `POST /api/sourcing-analyze` — receives products (top 50), target_revenue, min_products, max_products, shipping, tc; calls `claude-sonnet-4-6` (max_tokens=3000, timeout safe); returns `{"analysis": text}`
+- `POST /api/sourcing-analyze` — receives products (top 50), target_revenue, min_products, max_products, shipping, tc; calls `claude-sonnet-4-6` (max_tokens=4000); returns `{"analysis": text, "simulation": [...]}`
+  - Claude embeds a ```json block at the end of the response with the simulation array
+  - Backend extracts it with regex, strips it from the analysis text, returns both separately
+
+**Simulation JSON format (returned by Claude, extracted server-side):**
+```json
+[{"producto": "Nombre corto", "precio_ars": 120000, "unidades_mes": 25, "revenue_mes": 3000000}, ...]
+```
 
 **Report page (`templates/sourcing_report.html`):**
 - Full-screen dark theme (matches nubi_results.html style)
 - Header with meta chips (criteria summary) + print button
 - Loading spinner until data arrives via localStorage
 - Renders `mdToHtml(analysisText)` result
+- **Recuadro de simulación al final** (renderizado por `openSourcingReport()` en app.js, no por Claude):
+  - Borde y encabezado en color accent (#FFE600)
+  - Tabla: producto / precio de venta / unidades por mes / revenue mensual
+  - Fila TOTAL con suma y diferencia vs. objetivo (verde si supera, rojo si falta)
 - Auto-removes localStorage key after render
 
 ---
