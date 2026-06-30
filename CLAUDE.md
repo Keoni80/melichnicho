@@ -50,13 +50,14 @@ Token refresh in `_get()` handles both 401 and 403.
 - Free shipping bonus: 0–5 pts
 
 ## Key files
-- `app.py` — Flask routes: search, discover, analyze (AI), export CSV, history, rt-upload, rt-analyze, nubi-analyze, nubi-export, nubi-results
+- `app.py` — Flask routes: search, discover, analyze (AI), export CSV, history, rt-upload, rt-analyze, nubi-analyze, nubi-export, nubi-results, store-sales, sourcing-analyze, sourcing-report
 - `meli_api.py` — MeLi API + Apify integration, token refresh, visits enrichment
 - `analyzer.py` — Opportunity scoring, niche stats, seller ranking
-- `static/app.js` — Frontend logic (search, AI modal, RT modal, Nubimetrics modal)
+- `static/app.js` — Frontend logic (search, AI modal, RT modal, Nubimetrics modal, Mi Tienda modal, Sourcing modal)
 - `static/style.css` — Dark theme UI styles
 - `templates/index.html` — Main UI with all modals
 - `templates/nubi_results.html` — Full-page Nubimetrics results (opens in new tab)
+- `templates/sourcing_report.html` — Full-page Sourcing analysis report (opens in new tab)
 - `Procfile` — Gunicorn config (timeout 180s)
 
 ## Deploy
@@ -70,6 +71,75 @@ Needs `NODE_EXTRA_CA_CERTS` env var set if machine has AVG antivirus (SSL interc
 - `sold_quantity` always 0 because `/items/{id}` is blocked from Railway IPs since April 2025
 - Apify search takes 20-30 seconds (scraper startup time)
 - Free Railway plan has resource limits
+
+---
+
+## Features added 2026-06-30
+
+### 🏪 Mi Tienda (sales dashboard)
+**Button:** "🏪 Mi Tienda" (blue, in the search bar)
+
+**Flow:**
+1. Click "Mi Tienda" → modal opens with recent sales summary
+2. Click "🤖 Analizar con IA" → Claude analyzes sales performance, top products, trends, recommendations
+
+**Backend endpoints:**
+- `GET /api/sales-summary` — returns last 30 days of sales from SQLite (orders/items tables)
+- `POST /api/store-analyze` — receives sales data JSON, calls Claude, returns markdown analysis
+
+**Frontend (app.js):**
+- `openStoreModal()` — fetches `/api/sales-summary`, renders table
+- `analyzeStoreWithAI()` — POSTs to `/api/store-analyze`, renders result with `mdToHtml`
+
+---
+
+### 🎯 Sourcing module (multi-CSV AI product recommender)
+**Button:** "🎯 Sourcing" (purple gradient `#4A148C` → `#7B1FA2`, in the search bar)
+
+**Purpose:** Upload multiple Nubimetrics CSVs + set criteria → AI recommends best products to import and sell to hit a monthly revenue target.
+
+**Flow:**
+1. Click "🎯 Sourcing" → modal opens
+2. Upload one or more Nubimetrics CSV files (drag & drop or click)
+3. Fill criteria: objetivo de facturación (ARS), mín/máx productos, tipo de importación (courier/marítimo), tipo de cambio
+4. Click "Analizar" → new tab opens at `/sourcing-report` (full-screen dark report)
+5. AI analysis appears in the new tab via localStorage cross-tab communication
+
+**Why localStorage cross-tab:** `window.open()` must be called synchronously before any `await` to avoid popup blocker. The new tab is opened first at `/sourcing-report`, then after the async API call completes, data is written to `localStorage` key `sourcing_report_data`. The report page listens for the `storage` event and renders on arrival.
+
+**FOB pricing logic (in AI prompt):**
+- Courier import multiplier: CIF × 1.975 (50% arancel + 31.5% IVA + 10% IVA adicional + 6% Ganancias)
+- Marítimo import multiplier: CIF × 2.35 (higher duties, bulk shipments)
+- Target margin: 30% recommended, 25% minimum
+
+**Objetivo field formatting:** Uses `toLocaleString('es-AR')` for Argentine period-separated thousands (e.g., `30.000.000`). Stripped with `.replace(/\D/g, '')` before sending to API.
+
+**CSV processing (entirely client-side):**
+- Multiple files supported — rows are merged into a single dataset
+- `parseCSV(text)` handles quoted fields
+- `aggregateSourcingProducts(rows, headerRow)` groups by `Titulo_Publicacion`, sums units/revenue across months, returns top 50 products sorted by units sold
+- Only the aggregated ~50 products are sent to the server (avoids Railway timeout on large files)
+
+**Key Nubimetrics columns used for aggregation:**
+- `Titulo_Publicacion` — product grouping key
+- `Unidades_Vendidas` — units sold (primary sort metric)
+- `Monto_Vendido_Moneda_Local` — total revenue ARS
+- `PrecioMonedaLocal` — price ARS
+- `Categoria_Nivel_1` to `Nivel_4` — category hierarchy
+- `Nickname_Vendedor` — seller count
+- `OfreceFull`, `Ofrece_Envio_Gratis` — logistics flags
+- `Mes` — period (used to deduplicate months)
+
+**Backend endpoints:**
+- `GET /sourcing-report` — serves `sourcing_report.html` (protected by `@login_required`)
+- `POST /api/sourcing-analyze` — receives products (top 50), target_revenue, min_products, max_products, shipping, tc; calls `claude-sonnet-4-6` (max_tokens=3000, timeout safe); returns `{"analysis": text}`
+
+**Report page (`templates/sourcing_report.html`):**
+- Full-screen dark theme (matches nubi_results.html style)
+- Header with meta chips (criteria summary) + print button
+- Loading spinner until data arrives via localStorage
+- Renders `mdToHtml(analysisText)` result
+- Auto-removes localStorage key after render
 
 ---
 
@@ -146,6 +216,7 @@ Needs `NODE_EXTRA_CA_CERTS` env var set if machine has AVG antivirus (SSL interc
 
 ## Pending ideas
 - Compare prices with Alibaba (Apify has Alibaba scraper too)
-- On-demand Alibaba price lookup per product with margin calculation
+- On-demand Alibaba price lookup per product with margin calculation — FOB lookup + landed cost calculation at current TC
 - Nubimetrics: add price segment aggregation in client-side JS (currently simplified)
-- Consider integrating multiple Nubimetrics CSV exports (different categories) for cross-category analysis
+- Sourcing: show per-product margin simulation table in the report (FOB input → landed cost → suggested price → MG%)
+- Sourcing: add supplier search via Alibaba Apify scraper for top recommended products
