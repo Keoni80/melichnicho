@@ -103,8 +103,8 @@
   <div id="report" style="display:none"></div>
 </main>
 <script>
-function render() {
-    const raw = localStorage.getItem('sourcing_report_data');
+function render(raw) {
+    raw = raw || localStorage.getItem('sourcing_report_data');
     if (!raw) return;
     try {
         const { html, chips } = JSON.parse(raw);
@@ -118,7 +118,7 @@ function render() {
 
 render();
 window.addEventListener('storage', e => {
-    if (e.key === 'sourcing_report_data') render();
+    if (e.key === 'sourcing_report_data' && e.newValue) render(e.newValue);
 });
 </script>
 </body>

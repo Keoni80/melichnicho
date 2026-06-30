@@ -1121,59 +1121,51 @@ async function exportNubiExcel() {
 
 // ─── Sourcing Report Tab ─────────────────────────────────
 
-function openSourcingReport(analysisText, simulation, criteria) {
-    const shippingLabel = criteria.shipping === 'courier' ? '✈️ Courier' : '🚢 Marítimo';
-    const targetFmt = criteria.target.toLocaleString('es-AR');
+function buildSimHtml(simulation, target) {
+    if (!simulation || !simulation.length) return '';
+    const fmtARS = n => '$' + Math.round(n).toLocaleString('es-AR');
+    const total = simulation.reduce((s, p) => s + (p.revenue_mes || 0), 0);
+    const diff = total - target;
+    const diffLabel = diff >= 0
+        ? `<span class="sim-ok">+${fmtARS(diff)} sobre el objetivo ✓</span>`
+        : `<span class="sim-gap">${fmtARS(Math.abs(diff))} por debajo del objetivo</span>`;
+    const rows = simulation.map(p => `
+        <tr>
+            <td class="sim-prod">${p.producto}</td>
+            <td>${fmtARS(p.precio_ars)}</td>
+            <td class="sim-units">${p.unidades_mes}</td>
+            <td>${fmtARS(p.revenue_mes)}</td>
+        </tr>`).join('');
+    return `
+    <div class="sim-box">
+        <div class="sim-title">🎯 Simulación — cómo llegar a ${fmtARS(target)}/mes</div>
+        <table class="sim-table">
+            <thead><tr>
+                <th>Producto</th><th>Precio de venta</th><th>Unidades / mes</th><th>Revenue mensual</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+            <tfoot><tr class="sim-total">
+                <td colspan="2"><strong>TOTAL</strong></td>
+                <td><strong>${simulation.reduce((s,p) => s + p.unidades_mes, 0)}</strong></td>
+                <td><strong>${fmtARS(total)}</strong><br>${diffLabel}</td>
+            </tr></tfoot>
+        </table>
+    </div>`;
+}
+
+function buildChips(target, minProd, maxProd, shipping, tc) {
+    const shippingLabel = shipping === 'courier' ? '✈️ Courier' : '🚢 Marítimo';
     const now = new Date().toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
-
-    const chips = `
-        <span class="chip">🎯 Objetivo <strong>$${targetFmt} ARS</strong></span>
-        <span class="chip">📦 <strong>${criteria.minProd}–${criteria.maxProd}</strong> productos</span>
+    return `
+        <span class="chip">🎯 Objetivo <strong>$${target.toLocaleString('es-AR')} ARS</strong></span>
+        <span class="chip">📦 <strong>${minProd}–${maxProd}</strong> productos</span>
         <span class="chip">${shippingLabel}</span>
-        <span class="chip">💵 TC <strong>${criteria.tc.toLocaleString('es-AR')}</strong></span>
+        <span class="chip">💵 TC <strong>${tc.toLocaleString('es-AR')}</strong></span>
         <span class="chip">🕐 ${now}</span>`;
+}
 
-    let simHtml = '';
-    if (simulation && simulation.length) {
-        const fmtARS = n => '$' + Math.round(n).toLocaleString('es-AR');
-        const total = simulation.reduce((s, p) => s + (p.revenue_mes || 0), 0);
-        const diff = total - criteria.target;
-        const diffLabel = diff >= 0
-            ? `<span class="sim-ok">+${fmtARS(diff)} sobre el objetivo ✓</span>`
-            : `<span class="sim-gap">${fmtARS(Math.abs(diff))} por debajo del objetivo</span>`;
-
-        const rows = simulation.map(p => `
-            <tr>
-                <td class="sim-prod">${p.producto}</td>
-                <td>${fmtARS(p.precio_ars)}</td>
-                <td class="sim-units">${p.unidades_mes}</td>
-                <td>${fmtARS(p.revenue_mes)}</td>
-            </tr>`).join('');
-
-        simHtml = `
-        <div class="sim-box">
-            <div class="sim-title">🎯 Simulación — cómo llegar a $${targetFmt} ARS/mes</div>
-            <table class="sim-table">
-                <thead><tr>
-                    <th>Producto</th>
-                    <th>Precio de venta</th>
-                    <th>Unidades / mes</th>
-                    <th>Revenue mensual</th>
-                </tr></thead>
-                <tbody>${rows}</tbody>
-                <tfoot><tr class="sim-total">
-                    <td colspan="2"><strong>TOTAL</strong></td>
-                    <td><strong>${simulation.reduce((s,p) => s + p.unidades_mes, 0)}</strong></td>
-                    <td><strong>${fmtARS(total)}</strong><br>${diffLabel}</td>
-                </tr></tfoot>
-            </table>
-        </div>`;
-    }
-
-    localStorage.setItem('sourcing_report_data', JSON.stringify({
-        html: mdToHtml(analysisText) + simHtml,
-        chips,
-    }));
+function writeSourcingReport(analysisHtml, simHtml, chips) {
+    localStorage.setItem('sourcing_report_data', JSON.stringify({ html: analysisHtml + simHtml, chips }));
 }
 
 // ─── Sourcing Module ──────────────────────────────────────
@@ -1329,7 +1321,7 @@ async function analyzeSourcingWithAI() {
 
     const products = aggregateSourcingProducts(sourcingAllRows, knownHeader);
 
-    // Calcular simulación directo desde los datos (top N productos por unidades)
+    // Calcular simulación desde los datos (top N productos por unidades)
     const simCount = Math.min(maxProd, products.length);
     const simulation = products.slice(0, simCount).map(p => {
         const precio = p.precio_promedio || 0;
@@ -1343,6 +1335,13 @@ async function analyzeSourcingWithAI() {
         };
     });
 
+    const chips = buildChips(target, minProd, maxProd, shipping, tc);
+    const simHtml = buildSimHtml(simulation, target);
+
+    // Escribir simulación a localStorage AHORA, antes de la API call.
+    // La pestaña nueva la muestra de inmediato; el análisis de IA se agrega después.
+    writeSourcingReport('', simHtml, chips);
+
     btn.textContent = '⏳ Consultando IA...';
 
     try {
@@ -1353,21 +1352,17 @@ async function analyzeSourcingWithAI() {
         });
         document.getElementById('sourcing-loading').style.display = 'none';
 
-        const aiDiv = document.getElementById('sourcing-ai-result');
         if (!resp.ok) {
             let errMsg = `Error del servidor (${resp.status})`;
-            try { const e = await resp.json(); errMsg = e.error || errMsg; } catch {}
+            try { const e = await resp.text(); errMsg = JSON.parse(e).error || errMsg; } catch {}
             document.getElementById('sourcing-error').textContent = errMsg;
             document.getElementById('sourcing-error').style.display = 'block';
         } else {
             const raw = await resp.text();
-            const result = JSON.parse(raw.trim());
-            if (result.error) {
-                document.getElementById('sourcing-error').textContent = result.error;
-                document.getElementById('sourcing-error').style.display = 'block';
-            } else {
-                openSourcingReport(result.analysis, simulation, { target, minProd, maxProd, shipping, tc });
-            }
+            let analysisHtml = '';
+            try { analysisHtml = mdToHtml(JSON.parse(raw.trim()).analysis || ''); } catch {}
+            // Segunda escritura: agrega el análisis de IA encima de la simulación
+            writeSourcingReport(analysisHtml, simHtml, chips);
         }
     } catch (err) {
         document.getElementById('sourcing-loading').style.display = 'none';
