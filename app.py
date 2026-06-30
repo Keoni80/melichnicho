@@ -1041,16 +1041,27 @@ def sourcing_analyze():
         f"Con una línea final indicando si el objetivo de ${target_revenue:,.0f} ARS es alcanzable."
     )
 
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=3000,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return jsonify({"analysis": response.content[0].text})
-    except anthropic.APIError as e:
-        return jsonify({"error": str(e)}), 502
+    def generate():
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            chunks = []
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            ) as stream:
+                for text in stream.text_stream:
+                    chunks.append(text)
+                    yield " "  # keep-alive: evita timeout del proxy de Railway
+            yield json.dumps({"analysis": "".join(chunks)})
+        except anthropic.APIError as e:
+            yield json.dumps({"error": str(e)})
+
+    return Response(
+        generate(),
+        mimetype="application/json",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
 
 
 if __name__ == "__main__":

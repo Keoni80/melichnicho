@@ -1360,7 +1360,8 @@ async function analyzeSourcingWithAI() {
             document.getElementById('sourcing-error').textContent = errMsg;
             document.getElementById('sourcing-error').style.display = 'block';
         } else {
-            const result = await resp.json();
+            const raw = await resp.text();
+            const result = JSON.parse(raw.trim());
             if (result.error) {
                 document.getElementById('sourcing-error').textContent = result.error;
                 document.getElementById('sourcing-error').style.display = 'block';
