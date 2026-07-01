@@ -574,6 +574,61 @@ main {
 .btn-sourcing:active { transform: scale(.97); }
 .btn-sourcing:disabled { opacity: .45; cursor: not-allowed; }
 
+.btn-comp {
+    background: linear-gradient(135deg, #B71C1C 0%, #E94560 100%);
+    color: #fff;
+    border: none;
+    border-radius: var(--r);
+    padding: .7rem 1.3rem;
+    font-size: .9rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: opacity .15s, transform .1s;
+}
+.btn-comp:hover { opacity: .85; }
+.btn-comp:active { transform: scale(.97); }
+.btn-comp:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ─── Competidores modal ─────────────────────────────── */
+.comp-row {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    background: #0F3460;
+    border-radius: 8px;
+    padding: .7rem 1rem;
+    margin-bottom: .5rem;
+    flex-wrap: wrap;
+}
+.comp-row .comp-name { font-weight: 700; color: #fff; }
+.comp-row .comp-meta { color: #7A8499; font-size: .8rem; flex: 1; min-width: 180px; }
+.comp-row button {
+    border: none;
+    border-radius: 6px;
+    padding: .4rem .8rem;
+    font-size: .8rem;
+    cursor: pointer;
+    font-weight: 600;
+}
+.comp-row button:disabled { opacity: .5; cursor: not-allowed; }
+.comp-snap-btn { background: #FFE600; color: #1A1A2E; }
+.comp-report-btn { background: #4CAF50; color: #fff; }
+.comp-del-btn { background: transparent; color: #E94560; }
+
+.follow-seller-btn {
+    background: transparent;
+    border: 1px solid #E94560;
+    color: #E94560;
+    border-radius: 5px;
+    padding: 0 .35rem;
+    margin-left: .35rem;
+    font-size: .75rem;
+    cursor: pointer;
+    line-height: 1.3;
+}
+.follow-seller-btn:hover { background: #E94560; color: #fff; }
+
 /* ─── Sourcing modal ─────────────────────────────────── */
 .sourcing-dropzone {
     border: 2px dashed var(--border);

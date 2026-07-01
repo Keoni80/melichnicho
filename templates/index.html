@@ -30,6 +30,7 @@
             <button id="nubi-btn" class="btn-nubi" title="Analizá una categoría completa desde Nubimetrics">📈 Nubimetrics</button>
             <button id="store-btn" class="btn-store" title="Ver tus publicaciones activas con ventas reales y recomendaciones de crecimiento">🏪 Mi Tienda</button>
             <button id="sourcing-btn" class="btn-sourcing" title="Subí reportes de Nubimetrics y encontrá los mejores productos para importar y vender">🎯 Sourcing</button>
+            <button id="comp-btn" class="btn-comp" title="Seguí vendedores competidores: catálogo, precios y visitas con historial">🥊 Competidores</button>
         </div>
 
         <button id="filter-toggle" class="filter-toggle">
@@ -368,6 +369,28 @@
             <div id="sourcing-loading" style="display:none;padding:1rem 0;color:#aaa">🔄 Analizando con IA, puede tardar unos segundos...</div>
             <div id="sourcing-error" class="error-msg" style="display:none"></div>
             <div id="sourcing-ai-result" style="display:none;background:#0F3460;border-radius:8px;padding:1.2rem;margin-top:1rem;line-height:1.7;font-size:.9rem"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Competidores Modal -->
+<div id="comp-modal" class="modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="comp-modal-title">
+    <div class="modal-box modal-box-wide">
+        <div class="modal-header">
+            <h3 id="comp-modal-title">🥊 Competidores — Monitoreo de vendedores</h3>
+            <button id="close-comp-modal" class="modal-close" aria-label="Cerrar">✕</button>
+        </div>
+        <div class="ai-content" style="padding:1.25rem">
+            <p style="margin-bottom:.75rem;color:#aaa">Agregá un vendedor por su <strong style="color:#FFE600">alias</strong>, su <strong style="color:#FFE600">ID numérico</strong> o pegando la <strong style="color:#FFE600">URL de su perfil o listado</strong>. También podés seguirlo con el botón ➕ desde los resultados de búsqueda.</p>
+            <div style="display:flex;gap:.6rem;margin-bottom:1rem;flex-wrap:wrap">
+                <input type="text" id="comp-input" class="keyword-input" style="flex:1;min-width:220px"
+                       placeholder="Ej: TECNOFAST_AR, 2378399002 o https://...">
+                <button id="comp-add-btn" class="btn-primary">➕ Seguir</button>
+            </div>
+            <div id="comp-error" class="error-msg" style="display:none"></div>
+            <div id="comp-loading" style="display:none;padding:.75rem 0;color:#aaa"></div>
+            <div id="comp-list"></div>
+            <p style="margin-top:1rem;color:#666;font-size:.8rem">📸 Cada snapshot scrapea el <strong>catálogo completo</strong> del vendedor sin límite de publicaciones (~US$5 por cada 1.000) y trae hasta 150 días de historial de visitas por publicación. Corre en segundo plano: podés cerrar este modal y volver más tarde. El reporte compara los dos últimos snapshots.</p>
         </div>
     </div>
 </div>

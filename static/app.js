@@ -137,6 +137,22 @@ document.addEventListener('DOMContentLoaded', () => {
         handleSourcingFiles(e.dataTransfer.files);
     });
     dz.addEventListener('click', () => document.getElementById('sourcing-file-input').click());
+
+    // Competidores
+    document.getElementById('comp-btn').addEventListener('click', openCompModal);
+    document.getElementById('close-comp-modal').addEventListener('click', closeCompModal);
+    document.getElementById('comp-modal').addEventListener('click', e => {
+        if (e.target.id === 'comp-modal') closeCompModal();
+    });
+    document.getElementById('comp-add-btn').addEventListener('click', () => addCompetitor());
+    document.getElementById('comp-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter') addCompetitor();
+    });
+    // Botón ➕ "seguir vendedor" en la tabla de resultados (delegación)
+    document.getElementById('items-tbody').addEventListener('click', e => {
+        const btn = e.target.closest('.follow-seller-btn');
+        if (btn) followSeller(btn.dataset.seller, btn.dataset.name);
+    });
 });
 
 // ─── Sales Dashboard ──────────────────────────────────────
@@ -296,7 +312,9 @@ function renderItemsTable(items) {
             <td><a href="${esc(item.permalink)}" target="_blank" rel="noopener noreferrer" class="item-link">${esc(item.title)}</a></td>
             <td class="price">${fmtPrice(item.price)}</td>
             <td class="num">${item.visits > 0 ? item.visits.toLocaleString('es-AR') : '–'}</td>
-            <td class="seller" title="${esc(item.seller_name)}">${esc(item.seller_name)}</td>
+            <td class="seller" title="${esc(item.seller_name)}">${esc(item.seller_name)}${item.seller_id
+                ? `<button class="follow-seller-btn" data-seller="${esc(String(item.seller_id))}" data-name="${esc(item.seller_name)}" title="Seguir a este vendedor como competidor">➕</button>`
+                : ''}</td>
             <td>${item.free_shipping
                 ? '<span class="badge free">Gratis</span>'
                 : '<span class="badge paid">Pago</span>'}</td>
@@ -1371,5 +1389,268 @@ async function analyzeSourcingWithAI() {
     } finally {
         btn.disabled = false;
         btn.textContent = '🤖 Analizar y recomendar productos';
+    }
+}
+
+// ─── Competidores ─────────────────────────────────────────
+
+function openCompModal() {
+    document.getElementById('comp-modal').style.display = 'flex';
+    document.getElementById('comp-error').style.display = 'none';
+    loadCompetitors();
+}
+
+function closeCompModal() {
+    document.getElementById('comp-modal').style.display = 'none';
+}
+
+function compError(msg) {
+    const el = document.getElementById('comp-error');
+    el.textContent = msg;
+    el.style.display = msg ? 'block' : 'none';
+}
+
+async function loadCompetitors() {
+    const list = document.getElementById('comp-list');
+    try {
+        const resp = await fetch('/api/competitors');
+        const comps = await resp.json();
+        if (!comps.length) {
+            list.innerHTML = '<p class="empty-msg">Todavía no seguís a ningún vendedor.</p>';
+            return;
+        }
+        list.innerHTML = comps.map(c => `
+            <div class="comp-row" data-id="${c.id}">
+                <span class="comp-name">${esc(c.nickname || c.seller_id)}</span>
+                <span class="comp-meta">
+                    ${c.snapshots
+                        ? `${c.item_count ?? '?'} publicaciones · ${c.snapshots} snapshot${c.snapshots > 1 ? 's' : ''} · último: ${fmtDate(c.last_snapshot)}`
+                        : 'sin snapshots — corré el primero 📸'}
+                </span>
+                <button class="comp-snap-btn" onclick="snapshotCompetitor(${c.id}, this)">📸 Snapshot</button>
+                <button class="comp-report-btn" onclick="openCompReport(${c.id})" ${c.snapshots ? '' : 'disabled'}>📄 Reporte</button>
+                <button class="comp-del-btn" onclick="deleteCompetitor(${c.id}, '${esc(c.nickname || c.seller_id)}')" title="Dejar de seguir">🗑</button>
+            </div>
+        `).join('');
+        // Si hay snapshots corriendo en el server, retomar el polling
+        comps.forEach(async c => {
+            try {
+                const s = await (await fetch(`/api/competitors/${c.id}/snapshot-status`)).json();
+                if (s.status === 'running') {
+                    const btn = document.querySelector(`.comp-row[data-id="${c.id}"] .comp-snap-btn`);
+                    if (btn) { btn.disabled = true; btn.textContent = `⏳ ${s.pct || 0}%`; }
+                    pollSnapshot(c.id);
+                }
+            } catch {}
+        });
+    } catch {
+        list.innerHTML = '<p class="empty-msg">Error cargando competidores.</p>';
+    }
+}
+
+async function addCompetitor(sellerInput) {
+    const input = document.getElementById('comp-input');
+    const seller = sellerInput ?? input.value.trim();
+    if (!seller) return;
+    compError('');
+    const btn = document.getElementById('comp-add-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳';
+    try {
+        const resp = await fetch('/api/competitors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seller }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            compError(data.error || `Error del servidor (${resp.status})`);
+        } else {
+            input.value = '';
+            loadCompetitors();
+        }
+    } catch (err) {
+        compError('Error de conexión: ' + (err.message || ''));
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '➕ Seguir';
+    }
+}
+
+async function followSeller(sellerId, name) {
+    openCompModal();
+    document.getElementById('comp-loading').style.display = 'block';
+    document.getElementById('comp-loading').textContent = `Agregando a ${name || sellerId}...`;
+    await addCompetitor(String(sellerId));
+    document.getElementById('comp-loading').style.display = 'none';
+}
+
+const compPollers = {};
+
+async function snapshotCompetitor(id, btn) {
+    btn.disabled = true;
+    btn.textContent = '⏳ Iniciando…';
+    compError('');
+    try {
+        const resp = await fetch(`/api/competitors/${id}/snapshot`, { method: 'POST' });
+        const data = await resp.json();
+        if (!resp.ok && resp.status !== 409) {
+            compError(data.error || `Error del servidor (${resp.status})`);
+            loadCompetitors();
+            return;
+        }
+    } catch (err) {
+        compError('Error de conexión: ' + (err.message || ''));
+        loadCompetitors();
+        return;
+    }
+    pollSnapshot(id);
+}
+
+function pollSnapshot(id) {
+    if (compPollers[id]) return; // ya hay un poller activo para este competidor
+    compPollers[id] = setInterval(async () => {
+        let s;
+        try {
+            s = await (await fetch(`/api/competitors/${id}/snapshot-status`)).json();
+        } catch { return; } // error transitorio: reintenta en el próximo tick
+        if (s.status === 'running') {
+            const btn = document.querySelector(`.comp-row[data-id="${id}"] .comp-snap-btn`);
+            if (btn) {
+                btn.disabled = true;
+                btn.textContent = `⏳ ${s.pct || 0}% — ${s.msg || 'procesando…'}`;
+            }
+            return;
+        }
+        clearInterval(compPollers[id]);
+        delete compPollers[id];
+        if (s.status === 'error') compError(s.error || 'El snapshot falló.');
+        loadCompetitors();
+    }, 4000);
+}
+
+async function deleteCompetitor(id, name) {
+    if (!confirm(`¿Dejar de seguir a ${name}? Se borra también su historial de snapshots.`)) return;
+    await fetch(`/api/competitors/${id}`, { method: 'DELETE' });
+    loadCompetitors();
+}
+
+// ─── Reporte de competidor (pestaña nueva, patrón sourcing) ───
+
+function sparkline(weekly) {
+    if (!weekly || weekly.length < 2) return '';
+    const vals = weekly.slice(-10).map(w => w.v);
+    const max = Math.max(...vals);
+    if (!max) return '';
+    const blocks = '▁▂▃▄▅▆▇█';
+    return vals.map(v => blocks[Math.min(7, Math.round(v / max * 7))]).join('');
+}
+
+function deltaBadge(cur, prev) {
+    if (!prev) return '–';
+    const pct = Math.round((cur / prev - 1) * 100);
+    const cls = pct > 5 ? 'up' : pct < -5 ? 'down' : '';
+    return `<span class="${cls}">${pct > 0 ? '+' : ''}${pct}%</span>`;
+}
+
+function buildCompReportHtml(r) {
+    const t = r.totals;
+    let html = '';
+
+    html += `<div class="sim-box" style="margin-top:0"><div class="sim-title">📊 Resumen — ${esc(r.competitor.nickname)}</div>
+        <table class="sim-table"><tbody>
+        <tr><td>Publicaciones activas</td><td class="sim-units">${t.items}</td>
+            <td>Visitas últimos 30d</td><td class="sim-units">${t.v30.toLocaleString('es-AR')} ${deltaBadge(t.v30, t.v30_prev)}</td></tr>
+        <tr><td>Envío gratis</td><td>${t.free_shipping_pct}%</td>
+            <td>Transacciones históricas</td><td>${(r.seller?.transactions_total || 0).toLocaleString('es-AR')}${r.transactions_delta != null ? ` <span class="up">(+${r.transactions_delta.toLocaleString('es-AR')} desde el snapshot anterior)</span>` : ''}</td></tr>
+        </tbody></table></div>`;
+
+    if (r.prev_taken_at) {
+        if (r.price_changes.length) {
+            html += `<h2>💰 Cambios de precio (${r.price_changes.length})</h2>
+                <table><thead><tr><th>Producto</th><th>Antes</th><th>Ahora</th><th>Δ</th></tr></thead><tbody>` +
+                r.price_changes.slice(0, 25).map(c => `<tr>
+                    <td>${esc(c.title)}</td><td>${fmtPrice(c.old)}</td><td>${fmtPrice(c.new)}</td>
+                    <td><span class="${c.pct < 0 ? 'down' : 'up'}">${c.pct > 0 ? '+' : ''}${c.pct}%</span></td>
+                </tr>`).join('') + '</tbody></table>';
+        }
+        if (r.new_items.length) {
+            html += `<h2>🆕 Publicaciones nuevas (${r.new_items.length})</h2><ul>` +
+                r.new_items.slice(0, 25).map(i => `<li>${esc(i.title)} — ${fmtPrice(i.price)}</li>`).join('') + '</ul>';
+        }
+        if (r.removed_items.length) {
+            html += `<h2>🚫 Dadas de baja (${r.removed_items.length})</h2><ul>` +
+                r.removed_items.slice(0, 25).map(i =>
+                    `<li>${esc(i.title)} — ${fmtPrice(i.price)}${i.v30 ? ` <span class="down">(tenía ${i.v30.toLocaleString('es-AR')} visitas/30d — ¿quiebre de stock?)</span>` : ''}</li>`
+                ).join('') + '</ul>';
+        }
+        if (!r.price_changes.length && !r.new_items.length && !r.removed_items.length) {
+            html += `<h2>💤 Sin movimientos</h2><p>Sin cambios de precio ni altas/bajas desde el snapshot anterior.</p>`;
+        }
+    } else {
+        html += `<p style="color:#7A8499">Primer snapshot: los cambios de precio, altas y bajas van a aparecer a partir del próximo. El historial de visitas ya cubre hasta 150 días hacia atrás.</p>`;
+    }
+
+    html += `<h2>🔥 Catálogo por demanda (top ${Math.min(30, r.items.length)} de ${r.items.length})</h2>
+        <table><thead><tr><th>#</th><th>Producto</th><th>Precio</th><th>Visitas 30d</th><th>30d previos</th><th>Δ</th><th>Tendencia</th></tr></thead><tbody>` +
+        r.items.slice(0, 30).map((i, n) => `<tr>
+            <td>${n + 1}</td>
+            <td><a href="${esc(i.permalink)}" target="_blank" rel="noopener" style="color:inherit">${esc(i.title)}</a></td>
+            <td>${fmtPrice(i.price)}${i.price_prev ? ` <s style="color:#7A8499;font-size:.8em">${fmtPrice(i.price_prev)}</s>` : ''}</td>
+            <td><strong>${(i.v30 ?? 0).toLocaleString('es-AR')}</strong></td>
+            <td>${(i.v30_prev ?? 0).toLocaleString('es-AR')}</td>
+            <td>${deltaBadge(i.v30 ?? 0, i.v30_prev)}</td>
+            <td class="spark">${sparkline(i.weekly)}</td>
+        </tr>`).join('') + '</tbody></table>';
+
+    return html;
+}
+
+function writeCompReport(analysisHtml, tablesHtml, chips) {
+    localStorage.setItem('comp_report_data', JSON.stringify({ html: analysisHtml + tablesHtml, chips }));
+}
+
+async function openCompReport(id) {
+    // Abrir pestaña sincrónica (antes del await) para no ser bloqueada por el popup blocker
+    const tab = window.open('/competitor-report', '_blank');
+    compError('');
+    let report;
+    try {
+        const resp = await fetch(`/api/competitors/${id}/report`);
+        report = await resp.json();
+        if (!resp.ok) {
+            compError(report.error || `Error del servidor (${resp.status})`);
+            if (tab) tab.close();
+            return;
+        }
+    } catch (err) {
+        compError('Error de conexión: ' + (err.message || ''));
+        if (tab) tab.close();
+        return;
+    }
+
+    const chips = `
+        <span class="chip"><strong>${esc(report.competitor.nickname)}</strong></span>
+        <span class="chip">ID <strong>${esc(report.competitor.seller_id)}</strong></span>
+        ${report.seller?.power_seller_status ? `<span class="chip">⭐ <strong>${esc(report.seller.power_seller_status)}</strong></span>` : ''}
+        <span class="chip">Snapshot <strong>${fmtDate(report.taken_at)}</strong></span>
+        ${report.prev_taken_at ? `<span class="chip">vs. <strong>${fmtDate(report.prev_taken_at)}</strong></span>` : ''}`;
+
+    const tablesHtml = buildCompReportHtml(report);
+    // Primera escritura: tablas al toque; el análisis de IA se agrega después
+    writeCompReport('<p style="color:#7A8499">🤖 Generando análisis con IA…</p>', tablesHtml, chips);
+
+    try {
+        const resp = await fetch('/api/competitor-analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(report),
+        });
+        const raw = await resp.text();
+        let analysisHtml = '';
+        try { analysisHtml = mdToHtml(JSON.parse(raw.trim()).analysis || ''); } catch {}
+        writeCompReport(analysisHtml ? analysisHtml + '<hr>' : '', tablesHtml, chips);
+    } catch {
+        writeCompReport('<p style="color:#E94560">El análisis de IA falló — reintentá desde el modal.</p><hr>', tablesHtml, chips);
     }
 }

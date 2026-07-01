@@ -609,3 +609,293 @@ def _parse_item(raw):
         "thumbnail":          raw.get("thumbnail", ""),
         "listing_type":       raw.get("listing_type_id", ""),
     }
+
+
+# ─── Competitors module ───────────────────────────────────────────────────
+
+def get_seller_info(seller_id):
+    """Public seller profile via /users/{id}: nickname, reputation, historic transactions."""
+    try:
+        resp = _get(f"{BASE_URL}/users/{seller_id}", timeout=8)
+        if resp.ok:
+            d = resp.json()
+            rep = d.get("seller_reputation") or {}
+            trans = rep.get("transactions") or {}
+            return {
+                "seller_id": str(d.get("id", seller_id)),
+                "nickname": d.get("nickname", ""),
+                "permalink": d.get("permalink", ""),
+                "level_id": rep.get("level_id") or "",
+                "power_seller_status": rep.get("power_seller_status") or "",
+                "transactions_total": trans.get("total", 0) or 0,
+            }
+    except Exception as e:
+        log.warning("get_seller_info failed for %s: %s", seller_id, e)
+    return None
+
+
+def resolve_seller_alias(alias):
+    """Resolve a seller alias to its numeric ID by scraping the public profile page.
+
+    Works from residential IPs; MeLi's anti-bot usually blocks datacenter IPs
+    (Railway), so callers must handle None and ask for a _CustId_ URL instead.
+    """
+    import re
+    try:
+        resp = requests.get(
+            f"https://www.mercadolibre.com.ar/perfil/{alias}",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                              "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            },
+            timeout=12,
+        )
+        if resp.ok:
+            m = re.search(r"_CustId_(\d+)", resp.text)
+            if m:
+                return m.group(1)
+    except Exception as e:
+        log.warning("alias resolution failed for %s: %s", alias, e)
+    return None
+
+
+def fetch_seller_catalog(seller_id, max_items=0, timeout_secs=600):
+    """Scrape a seller's FULL active catalog via Apify (sourabhbgp actor, seller mode).
+
+    max_items=0 scrapes the whole catalog (sellers routinely have hundreds or
+    thousands of listings). Uses an async actor run + polling — the sync endpoint
+    caps at ~300s which large catalogs exceed. Cost ~$5/1000 rows.
+
+    Returns a list of normalized items or None on failure. Most rows carry a
+    catalog product ID (…/p/MLA…) that must be resolved to the seller's own
+    listing ID before querying visits.
+    """
+    token = os.environ.get("APIFY_API_TOKEN")
+    if not token:
+        log.error("APIFY_API_TOKEN not set")
+        return None
+
+    run_input = {
+        "mode": "seller",
+        "country": "AR",
+        "sellerUrls": [f"https://listado.mercadolibre.com.ar/_CustId_{seller_id}"],
+        "includeSellerProfile": False,
+        "useResidentialProxy": True,
+    }
+    if max_items:
+        run_input["maxItemsPerSeller"] = max_items
+
+    log.info("Apify seller catalog: seller_id=%s max_items=%s", seller_id, max_items or "ALL")
+    try:
+        resp = requests.post(
+            "https://api.apify.com/v2/acts/sourabhbgp~mercadolibre-scraper/runs",
+            params={"token": token, "timeout": timeout_secs},
+            json=run_input,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        run = resp.json()["data"]
+        run_id, dataset_id = run["id"], run["defaultDatasetId"]
+    except Exception as e:
+        log.error("Apify seller catalog run start failed: %s", e)
+        return None
+
+    deadline = time.time() + timeout_secs
+    status = ""
+    while time.time() < deadline:
+        time.sleep(5)
+        try:
+            r = requests.get(
+                f"https://api.apify.com/v2/actor-runs/{run_id}",
+                params={"token": token},
+                timeout=15,
+            )
+            status = r.json()["data"]["status"]
+        except Exception:
+            continue
+        if status == "SUCCEEDED":
+            break
+        if status in ("FAILED", "ABORTED", "TIMED-OUT"):
+            log.error("Apify seller catalog run %s ended %s", run_id, status)
+            return None
+    if status != "SUCCEEDED":
+        log.error("Apify seller catalog run %s still %s after %ds, aborting", run_id, status, timeout_secs)
+        try:
+            requests.post(
+                f"https://api.apify.com/v2/actor-runs/{run_id}/abort",
+                params={"token": token},
+                timeout=15,
+            )
+        except Exception:
+            pass
+        return None
+
+    try:
+        resp = requests.get(
+            f"https://api.apify.com/v2/datasets/{dataset_id}/items",
+            params={"token": token, "format": "json"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        log.error("Apify seller catalog dataset fetch failed: %s", e)
+        return None
+
+    if not isinstance(data, list):
+        log.error("Apify seller catalog unexpected response: %s", data)
+        return None
+
+    import re
+    items = []
+    for r in data:
+        if r.get("kind") != "item":
+            continue
+        url = r.get("url") or ""
+        item_id = r.get("productId") or ""
+        if not item_id:
+            m = re.search(r"(MLA-?\d{6,})", url) if "articulo." in url else None
+            if m:
+                item_id = m.group(1).replace("-", "")
+        items.append({
+            "catalog_id": r.get("catalogProductId") or "",
+            "item_id": item_id,
+            "title": r.get("title", ""),
+            "price": float(r.get("price") or 0),
+            "currency": r.get("currency", "ARS"),
+            "free_shipping": bool(r.get("freeShipping")),
+            "permalink": url,
+            "thumbnail": r.get("thumbnail", ""),
+            "position": r.get("position", 0),
+        })
+    log.info("Apify seller catalog returned %d items", len(items))
+    return items
+
+
+def _resolve_catalog_for_seller(catalog_id, seller_id):
+    """Return the listing ID that belongs to THIS seller for a catalog product.
+
+    Unlike _resolve_catalog_to_listing, never falls back to another seller's
+    listing — wrong-seller visits would poison the metrics.
+    """
+    try:
+        resp = _get(
+            f"{BASE_URL}/products/{catalog_id}/items",
+            params={"limit": 20, "status": "active"},
+            timeout=8,
+        )
+        if resp.ok:
+            for r in resp.json().get("results", []):
+                if str(r.get("seller_id")) == str(seller_id):
+                    return r.get("item_id")
+    except Exception as e:
+        log.warning("catalog-for-seller resolve failed for %s: %s", catalog_id, e)
+    return None
+
+
+def get_visits_history(item_id, last=150):
+    """Daily visit history via /visits/time_window (max 150 days back, any item).
+
+    Returns {"total", "v30", "v30_prev", "weekly": [{"w": iso_week_start, "v": n}]}
+    or None.
+    """
+    from datetime import datetime, timedelta, timezone
+    try:
+        resp = _get(
+            f"{BASE_URL}/items/{item_id}/visits/time_window",
+            params={"last": last, "unit": "day"},
+            timeout=10,
+        )
+        if not resp.ok:
+            return None
+        d = resp.json()
+    except Exception as e:
+        log.warning("visits history failed for %s: %s", item_id, e)
+        return None
+
+    now = datetime.now(timezone.utc)
+    v30 = v30_prev = 0
+    weekly = {}
+    for r in d.get("results") or []:
+        try:
+            dt = datetime.fromisoformat(r["date"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            continue
+        total = r.get("total", 0) or 0
+        age = (now - dt).days
+        if age <= 30:
+            v30 += total
+        elif age <= 60:
+            v30_prev += total
+        week_start = (dt - timedelta(days=dt.weekday())).strftime("%Y-%m-%d")
+        weekly[week_start] = weekly.get(week_start, 0) + total
+
+    return {
+        "total": d.get("total_visits", 0) or 0,
+        "v30": v30,
+        "v30_prev": v30_prev,
+        "weekly": [{"w": k, "v": weekly[k]} for k in sorted(weekly)],
+    }
+
+
+def snapshot_seller(seller_id, max_items=0, progress=None):
+    """Full competitor snapshot: catalog + seller reputation + per-item visit history.
+
+    max_items=0 = full catalog. Designed to run in a background thread — large
+    catalogs (thousands of listings) take several minutes. `progress(pct, msg)`
+    is called along the way if provided.
+
+    Returns {"seller": {...}|None, "items": [...]} or {"error": msg}.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    def report(pct, msg):
+        if progress:
+            try:
+                progress(pct, msg)
+            except Exception:
+                pass
+
+    report(3, "Consultando perfil del vendedor…")
+    # Sequential first call: triggers token refresh if needed, before the
+    # parallel phase (parallel refreshes would race on the single-use token).
+    info = get_seller_info(seller_id)
+
+    report(8, "Scrapeando catálogo completo (puede tardar varios minutos)…")
+    catalog = fetch_seller_catalog(seller_id, max_items)
+    if catalog is None:
+        return {"error": "No se pudo obtener el catálogo del vendedor (Apify falló o sin token)."}
+    if not catalog:
+        return {"error": "El scraper no devolvió publicaciones para este vendedor."}
+
+    total = len(catalog)
+    report(40, f"Catálogo: {total} publicaciones. Consultando historial de visitas…")
+    done = {"n": 0}
+    lock = threading.Lock()
+
+    def enrich(item):
+        item_id = item.get("item_id")
+        if not item_id and item.get("catalog_id"):
+            item_id = _resolve_catalog_for_seller(item["catalog_id"], seller_id)
+            item["item_id"] = item_id or ""
+        if item_id:
+            hist = get_visits_history(item_id)
+            if hist:
+                item["visits_total"] = hist["total"]
+                item["v30"] = hist["v30"]
+                item["v30_prev"] = hist["v30_prev"]
+                item["weekly"] = hist["weekly"]
+        with lock:
+            done["n"] += 1
+            if done["n"] % 20 == 0:
+                report(40 + int(58 * done["n"] / total), f"Visitas: {done['n']}/{total} publicaciones…")
+        return item
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        items = list(ex.map(enrich, catalog))
+
+    enriched = sum(1 for i in items if "v30" in i)
+    log.info("Snapshot seller %s: %d items, %d with visit history", seller_id, len(items), enriched)
+    report(99, "Guardando snapshot…")
+    return {"seller": info, "items": items}

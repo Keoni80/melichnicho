@@ -16,7 +16,11 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 from functools import wraps
 
 from analyzer import analyze_niche
-from meli_api import fetch_orders_total, get_categories, get_my_store_items, get_my_user_id, get_subcategories, sample_subcategory, search_meli
+from meli_api import (
+    fetch_orders_total, get_categories, get_my_store_items, get_my_user_id,
+    get_seller_info, get_subcategories, resolve_seller_alias, sample_subcategory,
+    search_meli, snapshot_seller,
+)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
@@ -79,8 +83,41 @@ def init_users_table():
             logging.info(f"Users in DB: {count}")
 
 
+def init_competitors_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS competitors (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id   TEXT UNIQUE NOT NULL,
+                nickname    TEXT,
+                permalink   TEXT,
+                added_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS competitor_snapshots (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                competitor_id INTEGER NOT NULL,
+                taken_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+                item_count    INTEGER,
+                seller_json   TEXT,
+                items_json    TEXT,
+                FOREIGN KEY (competitor_id) REFERENCES competitors(id)
+            );
+            -- Estado de snapshots en curso. Vive en SQLite (no en memoria) porque
+            -- Gunicorn corre 2 workers y el polling puede caer en cualquiera.
+            CREATE TABLE IF NOT EXISTS competitor_jobs (
+                competitor_id INTEGER PRIMARY KEY,
+                status        TEXT,
+                pct           INTEGER,
+                msg           TEXT,
+                error         TEXT,
+                updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+
 init_db()
 init_users_table()
+init_competitors_db()
 
 
 def login_required(f):
@@ -1039,6 +1076,326 @@ def sourcing_analyze():
         f"| Producto | Precio sugerido | Captura estimada/mes |\n"
         f"| --- | --- | --- |\n"
         f"Con una línea final indicando si el objetivo de ${target_revenue:,.0f} ARS es alcanzable."
+    )
+
+    def generate():
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            chunks = []
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=3000,
+                messages=[{"role": "user", "content": prompt}],
+            ) as stream:
+                for text in stream.text_stream:
+                    chunks.append(text)
+                    yield " "  # keep-alive: evita timeout del proxy de Railway
+            yield json.dumps({"analysis": "".join(chunks)})
+        except anthropic.APIError as e:
+            yield json.dumps({"error": str(e)})
+
+    return Response(
+        generate(),
+        mimetype="application/json",
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
+    )
+
+
+# ─── Competidores ─────────────────────────────────────────────────────────
+
+def _parse_seller_input(raw):
+    """Accepts numeric ID, _CustId_ URL, perfil URL or plain alias.
+    Returns (seller_id, error_msg)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None, "Ingresá un alias, ID o URL del vendedor."
+    if raw.isdigit():
+        return raw, None
+    m = re.search(r"_CustId_(\d+)", raw)
+    if m:
+        return m.group(1), None
+    m = re.search(r"/perfil/([\w.\-]+)", raw)
+    alias = m.group(1) if m else raw
+    if not re.fullmatch(r"[\w.\-]+", alias):
+        return None, "No pude interpretar ese vendedor. Pegá la URL de su perfil o su ID numérico."
+    seller_id = resolve_seller_alias(alias)
+    if seller_id:
+        return seller_id, None
+    return None, (
+        "No pude resolver el alias automáticamente (MeLi bloquea la consulta desde el servidor). "
+        "Abrí el perfil del vendedor en MeLi, tocá 'Ver más datos' o su listado de productos, "
+        "y pegá acá esa URL (contiene _CustId_) — o usá el botón ➕ desde los resultados de búsqueda."
+    )
+
+
+@app.route("/api/competitors")
+@login_required
+def competitors_list():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT c.*,
+                   (SELECT COUNT(*) FROM competitor_snapshots s WHERE s.competitor_id = c.id) AS snapshots,
+                   (SELECT MAX(taken_at) FROM competitor_snapshots s WHERE s.competitor_id = c.id) AS last_snapshot,
+                   (SELECT item_count FROM competitor_snapshots s WHERE s.competitor_id = c.id
+                    ORDER BY taken_at DESC LIMIT 1) AS item_count
+            FROM competitors c ORDER BY c.added_at DESC
+        """).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/competitors", methods=["POST"])
+@login_required
+def competitors_add():
+    data = request.get_json() or {}
+    seller_id, err = _parse_seller_input(data.get("seller"))
+    if err:
+        return jsonify({"error": err}), 422
+
+    info = get_seller_info(seller_id)
+    if not info:
+        return jsonify({"error": f"MeLi no devolvió datos para el vendedor {seller_id}."}), 404
+
+    with sqlite3.connect(DB_PATH) as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO competitors (seller_id, nickname, permalink) VALUES (?, ?, ?)",
+                (info["seller_id"], info["nickname"], info["permalink"]),
+            )
+        except sqlite3.IntegrityError:
+            return jsonify({"error": f"Ya estás siguiendo a {info['nickname']}."}), 409
+    return jsonify({"id": cur.lastrowid, **info})
+
+
+@app.route("/api/competitors/<int:cid>", methods=["DELETE"])
+@login_required
+def competitors_delete(cid):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM competitor_snapshots WHERE competitor_id = ?", (cid,))
+        conn.execute("DELETE FROM competitors WHERE id = ?", (cid,))
+    return jsonify({"ok": True})
+
+
+def _set_job(cid, status, pct=0, msg="", error=""):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO competitor_jobs (competitor_id, status, pct, msg, error, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"
+            " ON CONFLICT(competitor_id) DO UPDATE SET status=excluded.status, pct=excluded.pct,"
+            " msg=excluded.msg, error=excluded.error, updated_at=CURRENT_TIMESTAMP",
+            (cid, status, pct, msg, error),
+        )
+
+
+def _run_snapshot_job(cid, seller_id, max_items):
+    try:
+        result = snapshot_seller(
+            seller_id, max_items,
+            progress=lambda pct, msg: _set_job(cid, "running", pct, msg),
+        )
+        if "error" in result:
+            _set_job(cid, "error", error=result["error"])
+            return
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT INTO competitor_snapshots (competitor_id, item_count, seller_json, items_json)"
+                " VALUES (?, ?, ?, ?)",
+                (cid, len(result["items"]),
+                 json.dumps(result["seller"], ensure_ascii=False),
+                 json.dumps(result["items"], ensure_ascii=False)),
+            )
+        _set_job(cid, "done", 100, f"{len(result['items'])} publicaciones")
+    except Exception as e:
+        logging.exception("snapshot job failed for competitor %s", cid)
+        _set_job(cid, "error", error=str(e))
+
+
+# Sin señales de progreso durante este tiempo, el job se considera muerto
+# (deploy/restart de Railway mata el thread sin actualizar la tabla).
+_JOB_STALE_SECS = 600
+
+
+def _get_job(cid):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        job = conn.execute(
+            "SELECT *, (julianday(CURRENT_TIMESTAMP) - julianday(updated_at)) * 86400 AS age"
+            " FROM competitor_jobs WHERE competitor_id = ?", (cid,),
+        ).fetchone()
+    if not job:
+        return {"status": "idle"}
+    d = dict(job)
+    if d["status"] == "running" and d["age"] > _JOB_STALE_SECS:
+        d["status"] = "error"
+        d["error"] = "El snapshot se interrumpió (probable reinicio del servidor). Corré uno nuevo."
+    d.pop("age", None)
+    return d
+
+
+@app.route("/api/competitors/<int:cid>/snapshot", methods=["POST"])
+@login_required
+def competitors_snapshot(cid):
+    import threading
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        comp = conn.execute("SELECT * FROM competitors WHERE id = ?", (cid,)).fetchone()
+    if not comp:
+        return jsonify({"error": "Competidor no encontrado."}), 404
+
+    if _get_job(cid).get("status") == "running":
+        return jsonify({"error": "Ya hay un snapshot en curso para este competidor."}), 409
+
+    max_items = min(int((request.get_json(silent=True) or {}).get("max_items", 0)), 5000)
+    _set_job(cid, "running", 1, "Iniciando…")
+    threading.Thread(
+        target=_run_snapshot_job, args=(cid, comp["seller_id"], max_items), daemon=True,
+    ).start()
+    return jsonify({"started": True}), 202
+
+
+@app.route("/api/competitors/<int:cid>/snapshot-status")
+@login_required
+def competitors_snapshot_status(cid):
+    return jsonify(_get_job(cid))
+
+
+def _item_key(item):
+    return item.get("item_id") or item.get("catalog_id") or item.get("title")
+
+
+def _build_competitor_report(comp, latest, previous):
+    cur_items = json.loads(latest["items_json"])
+    seller = json.loads(latest["seller_json"] or "null")
+    prev_items = json.loads(previous["items_json"]) if previous else []
+    prev_map = {_item_key(i): i for i in prev_items}
+    cur_keys = {_item_key(i) for i in cur_items}
+
+    price_changes = []
+    for item in cur_items:
+        old = prev_map.get(_item_key(item))
+        if old and old.get("price") and item.get("price") and old["price"] != item["price"]:
+            item["price_prev"] = old["price"]
+            price_changes.append({
+                "title": item["title"], "old": old["price"], "new": item["price"],
+                "pct": round((item["price"] / old["price"] - 1) * 100, 1),
+            })
+
+    new_items = [i for i in cur_items if previous and _item_key(i) not in prev_map]
+    removed_items = [
+        {"title": i["title"], "price": i.get("price"), "v30": i.get("v30")}
+        for i in prev_items if _item_key(i) not in cur_keys
+    ]
+
+    prev_seller = json.loads(previous["seller_json"] or "null") if previous else None
+    transactions_delta = None
+    if seller and prev_seller and seller.get("transactions_total") and prev_seller.get("transactions_total"):
+        transactions_delta = seller["transactions_total"] - prev_seller["transactions_total"]
+
+    return {
+        "competitor": {"id": comp["id"], "nickname": comp["nickname"], "seller_id": comp["seller_id"],
+                       "permalink": comp["permalink"]},
+        "seller": seller,
+        "taken_at": latest["taken_at"],
+        "prev_taken_at": previous["taken_at"] if previous else None,
+        "transactions_delta": transactions_delta,
+        "items": sorted(cur_items, key=lambda i: -(i.get("v30") or 0)),
+        "price_changes": sorted(price_changes, key=lambda c: abs(c["pct"]), reverse=True),
+        "new_items": [{"title": i["title"], "price": i.get("price")} for i in new_items],
+        "removed_items": removed_items,
+        "totals": {
+            "items": len(cur_items),
+            "v30": sum(i.get("v30") or 0 for i in cur_items),
+            "v30_prev": sum(i.get("v30_prev") or 0 for i in cur_items),
+            "free_shipping_pct": round(100 * sum(1 for i in cur_items if i.get("free_shipping")) / len(cur_items)) if cur_items else 0,
+        },
+    }
+
+
+@app.route("/api/competitors/<int:cid>/report")
+@login_required
+def competitors_report(cid):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        comp = conn.execute("SELECT * FROM competitors WHERE id = ?", (cid,)).fetchone()
+        if not comp:
+            return jsonify({"error": "Competidor no encontrado."}), 404
+        snaps = conn.execute(
+            "SELECT * FROM competitor_snapshots WHERE competitor_id = ? ORDER BY taken_at DESC LIMIT 2",
+            (cid,),
+        ).fetchall()
+    if not snaps:
+        return jsonify({"error": "Este competidor todavía no tiene snapshots. Corré uno primero."}), 404
+    return jsonify(_build_competitor_report(comp, snaps[0], snaps[1] if len(snaps) > 1 else None))
+
+
+@app.route("/competitor-report")
+@login_required
+def competitor_report():
+    return render_template("competitor_report.html")
+
+
+@app.route("/api/competitor-analyze", methods=["POST"])
+@login_required
+def competitor_analyze():
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return jsonify({"error": "ANTHROPIC_API_KEY no configurada."}), 500
+
+    report = request.get_json() or {}
+    if not report.get("items"):
+        return jsonify({"error": "Sin datos para analizar."}), 400
+
+    # Compact payload: top 40 items by 30-day visits, weekly series trimmed to last 8 weeks
+    slim_items = []
+    for i in report["items"][:40]:
+        slim_items.append({
+            "titulo": i.get("title", "")[:80],
+            "precio": i.get("price"),
+            "precio_anterior": i.get("price_prev"),
+            "envio_gratis": i.get("free_shipping"),
+            "visitas_30d": i.get("v30"),
+            "visitas_30d_previas": i.get("v30_prev"),
+            "visitas_semanales": [w["v"] for w in (i.get("weekly") or [])[-8:]],
+        })
+
+    payload = {
+        "vendedor": report.get("seller"),
+        "snapshot_actual": report.get("taken_at"),
+        "snapshot_anterior": report.get("prev_taken_at"),
+        "delta_transacciones_historicas": report.get("transactions_delta"),
+        "totales": report.get("totals"),
+        "cambios_de_precio": report.get("price_changes", [])[:25],
+        "publicaciones_nuevas": report.get("new_items", [])[:25],
+        "publicaciones_dadas_de_baja": report.get("removed_items", [])[:25],
+        "top_publicaciones": slim_items,
+    }
+
+    prompt = (
+        "Sos un analista experto en e-commerce de MercadoLibre Argentina. "
+        "Te paso datos de monitoreo de un vendedor COMPETIDOR: su catálogo actual con visitas "
+        "diarias reales de MeLi (proxy de demanda; no hay datos de ventas), y si hay snapshot "
+        "anterior, los cambios de precio, altas y bajas de publicaciones.\n\n"
+        f"DATOS:\n{json.dumps(payload, ensure_ascii=False, indent=1)}\n\n"
+        "Notas sobre los datos:\n"
+        "- visitas_semanales: serie de visitas por semana (más antigua → más reciente), sirve para detectar tendencia.\n"
+        "- delta_transacciones_historicas: ventas reales aproximadas entre snapshots (si existe).\n"
+        "- Si no hay snapshot anterior, enfocate en la foto actual y las tendencias de visitas.\n\n"
+        "TAREA — respondé en markdown con estas secciones:\n"
+        "## Perfil del competidor\n"
+        "Qué vende, en qué segmento de precios juega, su escala y reputación. 3-4 líneas.\n"
+        "## Productos calientes\n"
+        "### por cada producto destacado (máx 5): qué está traccionando (visitas y tendencia), "
+        "precio, y veredicto 🟢 atacar / 🟡 observar / 🔴 no conviene competir.\n"
+        "## Movimientos recientes\n"
+        "Cambios de precio relevantes, publicaciones nuevas y dadas de baja, y qué revelan de su "
+        "estrategia. Si no hay snapshot anterior, indicá que esta sección estará disponible a partir "
+        "del próximo snapshot.\n"
+        "## Lectura estratégica\n"
+        "Hipótesis sobre su estrategia (líder de precio, surtido amplio, nichos premium, etc.).\n"
+        "## Acciones recomendadas\n"
+        "3 a 5 acciones concretas y priorizadas para competir contra este vendedor.\n\n"
+        "Usá formatos abreviados para números grandes ($1.2M, 14.4k). Sé directo y accionable."
     )
 
     def generate():

@@ -25,6 +25,7 @@ Since April 2025, MeLi blocked public API access for non-partner apps:
 - `/products/{id}/items` — get item_id from product
 - `/highlights/MLA/category/{id}` — highlighted products per category
 - `/visits/items?ids={item_id}` — visit counts (primary demand metric)
+- `/items/{item_id}/visits/time_window?last=N&unit=day` — daily visit history, max 150 days back, **works for third-party items** (verified 2026-07-01; last>150 returns 400)
 - `/users/{user_id}/items/search` — search own listings only
 
 ### Workaround:
@@ -69,6 +70,7 @@ Needs `NODE_EXTRA_CA_CERTS` env var set if machine has AVG antivirus (SSL interc
 
 ## Known issues
 - `sold_quantity` always 0 because `/items/{id}` is blocked from Railway IPs since April 2025
+- MeLi refresh tokens are single-use (short reuse grace window). The app stores refreshed tokens only in process memory + local `.env`, so the `MELI_REFRESH_TOKEN` in Railway's dashboard can go stale; if OAuth fails after a redeploy, refresh manually and re-sync both tokens to Railway variables (done 2026-07-01)
 - Apify search takes 20-30 seconds (scraper startup time)
 - Free Railway plan has resource limits
 
@@ -224,6 +226,39 @@ Needs `NODE_EXTRA_CA_CERTS` env var set if machine has AVG antivirus (SSL interc
 - `Mes` — period
 
 ---
+
+## Features added 2026-07-01
+
+### 🥊 Competidores (seller monitoring)
+**⚠️ STATUS: lives only on branch `competidores` — NOT merged to master, NOT deployed.** Fully built and verified end-to-end locally on 2026-07-01 (real 250-listing snapshot, background job, report + AI analysis, UI checked in Chrome). Deploy is on hold: the user is evaluating Apify scraping cost (~US$5 per 1,000 listings per snapshot; 5 large sellers weekly ≈ US$100/month). Cheaper variants discussed: lower snapshot frequency (150-day visit history covers trends), a "light mode" with capped `max_items`, or tracking individual listings by item ID (zero cost, OAuth only). To deploy: merge this branch to master (Railway autodeploys on push).
+
+**Button:** "🥊 Competidores" (red gradient, in the search bar)
+
+**Purpose:** Track competitor sellers over time: full catalog, prices, per-item visit history (up to 150 days back from day one), reputation and historic transactions. Snapshots are compared pairwise to detect price changes, new/removed listings and demand shifts.
+
+**Adding a competitor** (`POST /api/competitors`, input parsed by `_parse_seller_input`):
+- Numeric seller ID, or any URL containing `_CustId_<id>` → direct
+- Alias or perfil URL → `resolve_seller_alias()` scrapes `mercadolibre.com.ar/perfil/<alias>` for `_CustId_`. Works from residential IPs; MeLi anti-bot may block it on Railway → error message tells the user to paste a `_CustId_` URL or use the ➕ button
+- ➕ button next to each seller name in search results (`followSeller()` in app.js, uses the Apify `sellerID` already present)
+
+**Snapshot** (`POST /api/competitors/<id>/snapshot`, optional JSON `{"max_items": N}`, default 0 = FULL catalog, cap 5000): runs as a **background job** — sellers routinely have hundreds/thousands of listings, far beyond any HTTP timeout. The route returns 202 immediately (409 if already running); a daemon thread does the work and reports progress into SQLite table `competitor_jobs` (NOT in-memory: gunicorn runs 2 workers, polling can land on either). Frontend polls `GET /api/competitors/<id>/snapshot-status` every 4s (`pollSnapshot()` in app.js; polling resumes on modal open). Jobs with no progress signal for 10 min are reported as dead (server restart kills the thread).
+
+Snapshot pipeline (`snapshot_seller()` with `progress` callback):
+1. `get_seller_info()` — `/users/{id}` (works with OAuth): nickname, reputation level, power_seller_status, **historic transactions total** (delta between snapshots ≈ real sales)
+2. `fetch_seller_catalog()` — Apify actor **`sourabhbgp/mercadolibre-scraper`** mode `seller` with `sellerUrls: ["listado...._CustId_<id>"]` + `useResidentialProxy: true` (required — datacenter proxies hit MeLi anti-bot). Uses **async run + poll** (`/acts/.../runs` then `/actor-runs/{id}`), NOT run-sync (caps at ~300s). $5/1000 rows; 250 items ≈ 2 min. Returns mostly catalog product IDs
+3. Per item (ThreadPool 8 workers, ~30s per 250 items): `_resolve_catalog_for_seller()` (only THIS seller's listing, no fallback) + `get_visits_history()` — `/items/{id}/visits/time_window?last=150&unit=day` → total, v30, v30_prev, weekly series
+4. Stored in SQLite `competitor_snapshots` (items_json + seller_json blobs; ~230KB per 250 items)
+
+**Report** (`GET /api/competitors/<id>/report`): compares two latest snapshots — price_changes, new_items, removed_items (with "¿quiebre de stock?" flag if it had visits), transactions_delta, per-item v30 deltas. NOTE: snapshots taken with different max_items produce false new/removed entries (scrape order rotates) — full-catalog snapshots (default) don't have this problem.
+
+**Report page** (`/competitor-report` → `templates/competitor_report.html`): sourcing-report pattern — opener tab builds HTML (`buildCompReportHtml()` in app.js: summary box, diffs, catalog table with unicode sparklines), writes localStorage key `comp_report_data`, page listens to `storage` event. First write shows tables immediately; second write adds the Claude analysis.
+
+**AI analysis** (`POST /api/competitor-analyze`): streaming keep-alive like sourcing; prompt sends seller info + totals + diffs + top 40 items with weekly visit series; returns sections: Perfil / Productos calientes (🟢🟡🔴) / Movimientos / Lectura estratégica / Acciones.
+
+**Known quirks:**
+- The old karamelo actor cannot scrape sellers (keyword-only). khadinakbar actor's seller mode returns only a profile row — don't use it.
+- `/sites/MLA/search?nickname=` is dead (403 even from residential IPs).
+- 2 of 15 items in testing had no visit history (seller's listing not in the catalog product's top 20 active listings).
 
 ## Nubimetrics data files
 
