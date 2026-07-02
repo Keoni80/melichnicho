@@ -611,6 +611,15 @@ main {
 .sourcing-file-ok { color: #4CAF50; font-weight: bold; }
 .sourcing-file-name { color: var(--text); flex: 1; }
 .sourcing-file-count { color: var(--muted); font-size: .78rem; }
+.sourcing-file-remove {
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: .9rem;
+    padding: 0 .3rem;
+}
+.sourcing-file-remove:hover { color: #f44336; }
 .sourcing-criteria-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));

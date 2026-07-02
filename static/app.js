@@ -1170,8 +1170,8 @@ function writeSourcingReport(analysisHtml, simHtml, chips) {
 
 // ─── Sourcing Module ──────────────────────────────────────
 
-let sourcingAllRows = [];   // accumulates rows from all parsed CSVs
-let sourcingFileCount = 0;
+let sourcingFiles = [];     // [{id, name, rows}] — filas sin header, un entry por CSV
+let sourcingFileSeq = 0;    // id incremental para poder eliminar archivos del pool
 
 function handleSourcingFiles(files) {
     if (!files || !files.length) return;
@@ -1180,9 +1180,9 @@ function handleSourcingFiles(files) {
         reader.onload = e => {
             const rows = parseCSV(e.target.result);
             if (rows.length > 1) {
-                sourcingAllRows = sourcingAllRows.concat(rows.slice(1)); // skip header each time
-                sourcingFileCount++;
-                addSourcingFileItem(file.name, rows.length - 1);
+                const id = ++sourcingFileSeq;
+                sourcingFiles.push({ id, name: file.name, rows: rows.slice(1) }); // skip header
+                addSourcingFileItem(id, file.name, rows.length - 1);
                 document.getElementById('sourcing-criteria').style.display = 'block';
             }
         };
@@ -1190,16 +1190,28 @@ function handleSourcingFiles(files) {
     });
 }
 
-function addSourcingFileItem(name, rowCount) {
+function addSourcingFileItem(id, name, rowCount) {
     const list = document.getElementById('sourcing-file-list');
     const item = document.createElement('div');
     item.className = 'sourcing-file-item';
+    item.dataset.fileId = id;
     item.innerHTML = `
         <span class="sourcing-file-ok">✓</span>
         <span class="sourcing-file-name">${name}</span>
         <span class="sourcing-file-count">${rowCount.toLocaleString('es-AR')} registros</span>
+        <button class="sourcing-file-remove" title="Quitar archivo">✕</button>
     `;
+    item.querySelector('.sourcing-file-remove').addEventListener('click', () => removeSourcingFile(id, item));
     list.appendChild(item);
+}
+
+function removeSourcingFile(id, itemEl) {
+    sourcingFiles = sourcingFiles.filter(f => f.id !== id);
+    itemEl.remove();
+    if (!sourcingFiles.length) {
+        document.getElementById('sourcing-criteria').style.display = 'none';
+        document.getElementById('sourcing-error').style.display = 'none';
+    }
 }
 
 function aggregateSourcingProducts(rows, headerRow) {
@@ -1264,7 +1276,8 @@ function aggregateSourcingProducts(rows, headerRow) {
 }
 
 async function analyzeSourcingWithAI() {
-    if (!sourcingAllRows.length) {
+    const allRows = sourcingFiles.flatMap(f => f.rows);
+    if (!allRows.length) {
         document.getElementById('sourcing-error').textContent = 'Subí al menos un CSV primero.';
         document.getElementById('sourcing-error').style.display = 'block';
         return;
@@ -1319,7 +1332,7 @@ async function analyzeSourcingWithAI() {
     // Abrir pestaña sincrónica (antes del await) para no ser bloqueada por el popup blocker
     const reportTab = window.open('/sourcing-report', '_blank');
 
-    const products = aggregateSourcingProducts(sourcingAllRows, knownHeader);
+    const products = aggregateSourcingProducts(allRows, knownHeader);
 
     // Calcular simulación desde los datos (top N productos por unidades)
     const simCount = Math.min(maxProd, products.length);
